@@ -3,6 +3,7 @@ package main
 import (
 	"code.google.com/p/go-uuid/uuid"
 	"errors"
+	"fmt"
 	"github.com/ziutek/rrd"
 	"gopkg.in/yaml.v1"
 	"io/ioutil"
@@ -269,6 +270,15 @@ func (mon *Monitor) Remove() error {
 func newMonitor(opts *MonitorOpts) (*Monitor, error) {
 	vals := make([]MonValue, len(opts.Values))
 	for i, v := range opts.Values {
+		if pluggedSensors[v.Sensor] == nil {
+			err := errors.New("no sensor `" + v.Sensor + "' connected")
+			return nil, err
+		}
+		if len(pluggedSensors[v.Sensor].Values) <= v.ValueIdx {
+			err := fmt.Errorf("no value %d for sensor `%s' available",
+				v.ValueIdx, v.Sensor)
+			return nil, err
+		}
 		vals[i] = MonValue{
 			"",
 			v.Sensor,
