@@ -24,7 +24,6 @@ func openLog() (*log.Logger, error) {
 				return nil, err
 			}
 		}
-		defer f.Close()
 		logger = log.New(f, "", log.LstdFlags)
 	} else {
 		// path to log file not specified, use stderr
