@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"time"
 )
@@ -16,8 +17,17 @@ type SerData struct {
 // It returns channel to read data from, channel receiving value to stop series
 // and error if any.
 func startSeries(values []ValueId, period time.Duration, count int) (<-chan *SerData, chan<- int, error) {
-	// check that count does not exceed resolution
+	// check that values are available and period does not exceed resolution
 	for _, v := range values {
+		if pluggedSensors[v.Sensor] == nil {
+			err := errors.New("no sensor `" + v.Sensor + "' connected")
+			return nil, nil, err
+		}
+		if len(pluggedSensors[v.Sensor].Values) <= v.ValueIdx {
+			err := fmt.Errorf("no value %d for sensor `%s' available",
+				v.ValueIdx, v.Sensor)
+			return nil, nil, err
+		}
 		if pluggedSensors[v.Sensor].Values[v.ValueIdx].Resolution > period {
 			err := errors.New("cannot read values so quickly")
 			return nil, nil, err
