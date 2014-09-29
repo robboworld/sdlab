@@ -344,7 +344,7 @@ func valueAvailable(s string, v int) bool {
 	if !ok {
 		return false
 	}
-	if v >= len(pluggedSensors[s].Values) {
+	if v >= len(pluggedSensors[s].Values) || v < 0 {
 		return false
 	}
 	return true
