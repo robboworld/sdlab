@@ -35,6 +35,7 @@ type Monitor struct {
 	Values   []MonValue
 	Archives []RRA
 	Created  time.Time
+	StopAt   time.Time
 	stop     chan int
 }
 
@@ -44,7 +45,8 @@ type MonitorYAML struct {
 	Step     uint
 	Values   []MonValue
 	Archives []RRA
-	Created  time.Time
+	Created  string
+	StopAt   string "stopat,omitempty"
 }
 
 type ArchiveInfo struct {
@@ -53,6 +55,8 @@ type ArchiveInfo struct {
 }
 
 type MonitorInfo struct {
+	Created  time.Time
+	StopAt   time.Time
 	Last     time.Time
 	Archives []ArchiveInfo
 }
@@ -67,20 +71,30 @@ func monitorToYAML(mon *Monitor) (monYAML *MonitorYAML, err error) {
 		mon.Step,
 		mon.Values,
 		mon.Archives,
-		mon.Created,
+		mon.Created.Format(time.RFC3339Nano),
+		mon.StopAt.Format(time.RFC3339Nano),
 	}
 	return monYAML, nil
 }
 
 func monitorFromYAML(monYAML *MonitorYAML) (mon *Monitor, err error) {
 	uuid := uuid.Parse(monYAML.UUID)
+	created, err := time.Parse(time.RFC3339Nano, monYAML.Created)
+	if err != nil {
+		return nil, err
+	}
+	stopAt, err := time.Parse(time.RFC3339Nano, monYAML.StopAt)
+	if err != nil {
+		return nil, err
+	}
 	mon = &Monitor{
 		monYAML.Active,
 		uuid,
 		monYAML.Step,
 		monYAML.Values,
 		monYAML.Archives,
-		monYAML.Created,
+		created,
+		stopAt,
 		nil,
 	}
 	return mon, nil
@@ -120,7 +134,12 @@ func loadRunMonitors() error {
 			continue
 		}
 		if mon.Active {
-			err = mon.Run()
+			if mon.StopAt.IsZero() || mon.StopAt.After(time.Now()) {
+				err = mon.Run()
+			} else {
+				mon.Active = false
+				err = mon.save()
+			}
 			if err != nil {
 				logger.Print(err)
 			}
@@ -179,6 +198,9 @@ func (mon *Monitor) Run() error {
 	vals := make([]interface{}, len(mon.Values)+1)
 	go func() {
 		for tm := range t.C {
+			if (!mon.StopAt.IsZero()) && mon.StopAt.Before(tm) {
+				mon.Stop()
+			}
 			if len(mon.stop) > 0 {
 				return
 			}
@@ -193,19 +215,16 @@ func (mon *Monitor) Run() error {
 			u.Update(vals...)
 		}
 	}()
-	mon.Created = time.Now()
 	return nil
 }
 
 func (mon *Monitor) Stop() error {
 	if !mon.Active {
-		err := errors.New("Monitor " + mon.UUID.String() + " is inactive")
-		return err
+		return errors.New("Monitor " + mon.UUID.String() + " is inactive")
 	}
 	mon.stop <- 1
 	mon.Active = false
-	mon.save()
-	return nil
+	return mon.save()
 }
 
 func (mon *Monitor) save() error {
@@ -236,6 +255,8 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 		}
 	}
 	mi := &MonitorInfo{
+		mon.Created,
+		mon.StopAt,
 		time.Unix(int64(ri["last_update"].(uint)), 0),
 		ai,
 	}
@@ -268,6 +289,10 @@ func (mon *Monitor) Remove() error {
 }
 
 func newMonitor(opts *MonitorOpts) (*Monitor, error) {
+	if (!opts.StopAt.IsZero()) && opts.StopAt.Before(time.Now()) {
+		err := errors.New("monitor stop time is in the past")
+		return nil, err
+	}
 	vals := make([]MonValue, len(opts.Values))
 	for i, v := range opts.Values {
 		if pluggedSensors[v.Sensor] == nil {
@@ -298,6 +323,7 @@ func newMonitor(opts *MonitorOpts) (*Monitor, error) {
 		vals,
 		rras,
 		time.Now(),
+		opts.StopAt,
 		nil,
 	}
 	return &mon, nil
@@ -316,6 +342,7 @@ func createRunMonitor(opts *MonitorOpts) (*Monitor, error) {
 	if err != nil {
 		return mon, err
 	}
+	mon.Created = time.Now()
 	monitors[string(mon.UUID)] = mon
 	return mon, nil
 }

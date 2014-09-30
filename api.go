@@ -49,6 +49,7 @@ type MonitorOpts struct {
 	Values []ValueId
 	Step   uint
 	Count  uint
+	StopAt time.Time
 }
 
 type APIMonValue struct {
@@ -60,6 +61,7 @@ type APIMonitor struct {
 	Active  bool
 	UUID    string
 	Created time.Time
+	StopAt  time.Time
 	Values  []APIMonValue
 }
 
@@ -206,6 +208,7 @@ func (lab *Lab) ListMonitors(ptr uintptr, result *[]APIMonitor) error {
 			v.Active,
 			v.UUID.String(),
 			v.Created,
+			v.StopAt,
 			make([]APIMonValue, len(v.Values)),
 		}
 		for i, vl := range v.Values {
