@@ -1,13 +1,13 @@
 package main
 
 import (
+	"github.com/scratchduino/sdlab/user"
 	"gopkg.in/yaml.v1"
 	"io/ioutil"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sdlab/user"
 	"time"
 )
 
