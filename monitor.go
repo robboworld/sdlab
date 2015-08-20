@@ -188,8 +188,8 @@ func (mon *Monitor) CreateRRD() error {
 		c.DS(name,
 			v.Type.String(),
 			2*mon.Step,
-			pluggedSensors[v.Sensor].Values[v.ValueIdx].Range.Min,
-			pluggedSensors[v.Sensor].Values[v.ValueIdx].Range.Max,
+			fmt.Sprintf("%f", pluggedSensors[v.Sensor].Values[v.ValueIdx].Range.Min),
+			fmt.Sprintf("%f", pluggedSensors[v.Sensor].Values[v.ValueIdx].Range.Max),
 		)
 		mon.Values[i].Name = name
 	}
