@@ -281,6 +281,7 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 		s, err = c.Output()
 		if err != nil {
 			logger.Print("`" + cmd + "': " + err.Error())
+			return 0.0, err
 		}
 	} else if path.IsAbs(sensor.Values[n].File) {
 		// read value from file by absolute path.
@@ -320,7 +321,7 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 		}
 		s, err = ioutil.ReadFile(file)
 		if err != nil {
-			err = fmt.Errorf("Car not read file `%s': %s", file, err)
+			err = fmt.Errorf("Can not read file `%s': %s", file, err)
 			return 0.0, err
 		}
 	}
