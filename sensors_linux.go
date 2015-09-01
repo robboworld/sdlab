@@ -280,7 +280,7 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 		c := exec.Command("/bin/sh", "-c", cmd)
 		s, err = c.Output()
 		if err != nil {
-			logger.Print("`" + cmd + "': " + err.Error())
+			logger.Print("'" + cmd + "': " + err.Error())
 			return 0.0, err
 		}
 	} else if path.IsAbs(sensor.Values[n].File) {
@@ -336,6 +336,9 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 	}
 	if err != nil {
 		return math.NaN(), errors.New("Can not parse data: " + err.Error())
+	}
+	if math.IsNaN(data) {
+		return math.NaN(), errors.New("Can not parse data: NaN")
 	}
 	data = data*sensor.Values[n].Multiplier + sensor.Values[n].Addend
 	return data, nil
