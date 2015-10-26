@@ -28,6 +28,8 @@ import (
 	"net/rpc/jsonrpc"
 	"os"
 	"time"
+	"fmt"
+	"os/exec"
 )
 
 type Lab struct {
@@ -88,6 +90,12 @@ type MonFetchOpts struct {
 	Start time.Time
 	End   time.Time
 	Step  time.Duration
+}
+
+type TimeSetOpts struct {
+	TZ       string
+	Datetime time.Time
+	Reboot   bool
 }
 
 // Implement json.Marshaler interface to handle not-a-number values.
@@ -294,6 +302,66 @@ func (lab *Lab) GetMonData(opts *MonFetchOpts, data *[]*SerData) error {
 		*data = append(*data, &d)
 		row++
 	}
+	return nil
+}
+
+func (lab *Lab) SetDatetime(opts *TimeSetOpts, ok *bool) error {
+	*ok = true
+
+	// Set date and time (UTC)
+	// Format: %m%d%H%M%Y.%S
+	dt := fmt.Sprintf("%02d%02d%02d%02d%d.%02d", opts.Datetime.Month(), opts.Datetime.Day(), opts.Datetime.Hour(), opts.Datetime.Minute(), opts.Datetime.Year(), opts.Datetime.Second())
+	out, err := exec.Command("date", "-u", dt).Output()
+	if err != nil {
+		*ok = false
+		return errors.New("Set datetime failed: " + err.Error())
+	}
+	logger.Printf("The date is %s\n", out)
+
+	/**
+	 *
+	 * TODO: Save new time to RTC timer if exists
+	 *
+	 */
+
+	// Set timezone
+	if opts.TZ != "" {
+		// XXX: TZ update is not works with "sh -c", it's shows error "sh:1:Not found..."
+		/*
+		cmdtz := fmt.Sprintf("'echo %s >/etc/timezone && /usr/sbin/dpkg-reconfigure -f noninteractive tzdata'", opts.TZ)
+		out, err := exec.Command("sh", "-c", cmdtz).Output()
+		if err != nil {
+			*ok = false
+			return errors.New("Set timezone failed: " + err.Error())
+		}
+		*/
+
+		// Use batch script to set TZ and reconfigure
+		_, err := exec.Command("changetz.sh", opts.TZ).Output()
+		if err != nil {
+			*ok = false
+			return errors.New("Set timezone failed: " + err.Error())
+		}
+		logger.Printf("The timezone is %s\n", opts.TZ)
+	}
+
+	// Reboot (need only if changed TZ)
+	if opts.Reboot {
+		/*
+		// XXX: not works (blocks thread)
+		//_, err := exec.Command("/sbin/shutdown", "-r", "-t ", "5", "now").Output()
+		*/
+		// Use nonblocking method - script with call shutdown scheduled as:
+		//   echo "shutdown -r now" | at now + 1 minute
+		// minimum delay is 1 min :(
+		_, err := exec.Command("sdlabreboot.sh").Output()
+		if err != nil {
+			*ok = false
+			return errors.New("Update timezone error, cannot reboot: " + err.Error())
+		}
+		logger.Println("Reboot started...")
+	}
+
 	return nil
 }
 
