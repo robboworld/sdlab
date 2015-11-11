@@ -30,6 +30,8 @@ import (
 	"time"
 	"fmt"
 	"os/exec"
+	"strings"
+	"bytes"
 )
 
 type Lab struct {
@@ -96,6 +98,19 @@ type TimeSetOpts struct {
 	TZ       string
 	Datetime time.Time
 	Reboot   bool
+}
+
+type CamData struct {
+	Index    uint
+	Device   string
+	Name     string
+}
+
+type CamStreamData struct {
+	Index    uint
+	Device   string
+	Stream   int
+	Port     uint
 }
 
 // Implement json.Marshaler interface to handle not-a-number values.
@@ -361,6 +376,134 @@ func (lab *Lab) SetDatetime(opts *TimeSetOpts, ok *bool) error {
 		}
 		logger.Println("Reboot started...")
 	}
+
+	return nil
+}
+
+func (lab *Lab) ListVideos(ptr uintptr, data *[]*CamData) error {
+	// Shell script for enum devices
+	out, err := exec.Command("camlist.sh").Output()
+	if err != nil {
+		return errors.New("List videos failed: " + err.Error())
+	}
+
+	// Parse output for video devices info
+	buf := bytes.NewBuffer(out)
+	lines := strings.Split(buf.String(), "\n")
+	*data = make([]*CamData, 0)
+
+	for _, s := range lines {
+		if !strings.Contains(s, ":") {
+			continue
+		}
+		cd := CamData{
+			0,
+			"",
+			"",
+		}
+		attr := strings.Split(s, ":")
+		lattr := len(attr)
+		if lattr > 1 {
+			cd.Name = attr[1]
+		}
+		if lattr > 0 {
+			cd.Device = attr[0]
+			var idx uint
+			_, err := fmt.Sscanf(cd.Device, "/dev/video%d", &idx)
+			if err != nil {
+				continue
+			}
+			cd.Index = idx
+		}
+
+		*data = append(*data, &cd)
+	}
+
+	return nil
+}
+
+func (lab *Lab) GetVideoStream(device *string, info *CamStreamData) error {
+	out, err := exec.Command("mjpgcmdline.sh").Output()
+	if err != nil {
+		return errors.New("List videos failed: " + err.Error())
+	}
+
+	// Init struct
+	csd := CamStreamData{
+		0,
+		"",
+		-1,
+		8090,
+	}
+
+	var iinp int
+	var idx uint
+	var pnum uint
+
+	// Parse output for video devices info
+	buf := bytes.NewBuffer(out)
+	lines := strings.Split(buf.String(), "\n")
+	iinp = 0
+	for _, s := range lines {
+		if strings.HasPrefix(s, "input_uvc.so") {
+			// Input uvc plugin args
+			iinp++;
+
+			args := strings.Split(s, " ")
+			dname := ""
+			for _, arg := range args {
+				if !strings.HasPrefix(arg, "/dev/video") {
+					continue
+				} else {
+					dname = arg
+					break
+				}
+			}
+			// Use only given device names (not used /dev/video0 by default)
+			// and skip non requested devices
+			if dname == "" || dname != *device {
+				continue
+			}
+			csd.Device = dname
+
+			// Get device index
+			_, err := fmt.Sscanf(csd.Device, "/dev/video%d", &idx)
+			if err != nil {
+				continue
+			}
+			csd.Index = idx
+			csd.Stream = iinp - 1
+
+		} else if strings.HasPrefix(s, "output_http.so") {
+			// Output http plugin args
+
+			args := strings.Split(s, " ")
+			pnum = 0
+			for i, arg := range args {
+				if arg != "-p" && arg != "--port" {
+					continue
+				} else {
+					// If exists port number after prefix (parse last args string part)
+					_, err := fmt.Sscanf(strings.Join(args[i:], " "), "%d", &idx)
+					if err != nil {
+						// Not set port number
+						break
+					}
+					pnum = idx
+					break
+				}
+			}
+			if pnum>0 {
+				csd.Port = pnum
+			}
+
+			continue
+		} else {
+			continue
+		}
+	}
+
+	*info = csd
 
 	return nil
 }
