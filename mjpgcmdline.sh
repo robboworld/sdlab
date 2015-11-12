@@ -1,8 +1,10 @@
-#!/bin/sh
+#!/bin/bash
 
-mjpid=`ps aux | grep "[m]jpg_streamer" | awk '{print $2}'`
+APPNAME="mjpg_streamer"
 
-if [ -n "$mjpid" ];
+apppid=`ps aux | grep "[${APPNAME:0:1}]${APPNAME:1}\s*\-b" | awk '{print $2}'`
+
+if [ -n "$apppid" ];
 then
-	cat -v /proc/${mjpid}/cmdline | sed 's/\^@/\n/g' && echo
+	cat -v /proc/${apppid}/cmdline | sed 's/\^@/\n/g' && echo
 fi
