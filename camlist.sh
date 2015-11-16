@@ -1,6 +1,7 @@
-#!/bin/sh
+#! /bin/sh
 
 COLUMNS=9999
+[ -d /sys/class/video4linux ] || exit 0
 for I in /sys/class/video4linux/*;
 do
 	[ -e $I ] || continue
