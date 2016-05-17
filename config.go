@@ -142,7 +142,7 @@ func valueFromYAML(valueYAML ValueYAML) (value *Value, err error) {
 	} else {
 		re, err = regexp.Compile(valueYAML.Re)
 		if err != nil {
-			logger.Printf("Error compilng regexp `%s': %s", valueYAML.Re, err)
+			logger.Printf("Error compiling regexp `%s': %s", valueYAML.Re, err)
 		}
 	}
 	if math.Abs(valueYAML.Multiplier) > math.SmallestNonzeroFloat64 {
@@ -211,7 +211,7 @@ func loadSensors(path string) (err error) {
 		}
 		sensor, err := sensorFromYAML(sensorYAML)
 		if err != nil {
-			logger.Printf("Error reading gonfiguration from file `%s': %s", files[i], err)
+			logger.Printf("Error reading configuration from file `%s': %s", files[i], err)
 			continue
 		}
 		sensors = append(sensors, *sensor)

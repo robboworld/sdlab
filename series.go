@@ -82,7 +82,7 @@ func startSeries(values []ValueId, period time.Duration, count int) (<-chan *Ser
 				close(out)
 				break
 			}
-			// or series is comlete
+			// or series is complete
 			count--
 			if count == 0 {
 				close(out)
