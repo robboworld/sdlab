@@ -137,7 +137,7 @@ func detachI2C(bus uint, addr uint) error {
 	if err != nil {
 		return err
 	}
-	_, err = file.Write([]byte(fmt.Sprintf("0x%x\n", addr)))
+	_, err = file.Write([]byte(fmt.Sprintf("%d\n", addr)))
 	if err != nil {
 		logger.Print(err)
 		return err
@@ -153,7 +153,7 @@ func attachI2C(bus uint, addr uint, dev string) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(f, "%s 0x%x\n", dev, addr)
+	_, err = fmt.Fprintf(f, "%s %d\n", dev, addr)
 	f.Close()
 	return err
 }
