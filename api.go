@@ -30,6 +30,8 @@ import (
 	"time"
 	"fmt"
 	"os/exec"
+	"strings"
+	"bytes"
 )
 
 type Lab struct {
@@ -96,6 +98,19 @@ type TimeSetOpts struct {
 	TZ       string
 	Datetime time.Time
 	Reboot   bool
+}
+
+type CamData struct {
+	Index    uint
+	Device   string
+	Name     string
+}
+
+type CamStreamData struct {
+	Index    uint
+	Device   string
+	Stream   int
+	Port     uint
 }
 
 // Implement json.Marshaler interface to handle not-a-number values.
@@ -360,6 +375,303 @@ func (lab *Lab) SetDatetime(opts *TimeSetOpts, ok *bool) error {
 			return errors.New("Update timezone error, cannot reboot: " + err.Error())
 		}
 		logger.Println("Reboot started...")
+	}
+
+	return nil
+}
+
+func (lab *Lab) ListVideos(ptr uintptr, data *[]*CamData) error {
+	// Shell script for enum devices
+	out, err := exec.Command("camlist.sh").Output()
+	if err != nil {
+		return errors.New("List videos failed: " + err.Error())
+	}
+
+	// Parse output for video devices info
+	buf := bytes.NewBuffer(out)
+	lines := strings.Split(buf.String(), "\n")
+	*data = make([]*CamData, 0)
+
+	for _, s := range lines {
+		if !strings.Contains(s, ":") {
+			continue
+		}
+		cd := CamData{
+			0,
+			"",
+			"",
+		}
+		attr := strings.Split(s, ":")
+		lattr := len(attr)
+		if lattr > 1 {
+			cd.Name = attr[1]
+		}
+		if lattr > 0 {
+			cd.Device = attr[0]
+			var idx uint
+			_, err := fmt.Sscanf(cd.Device, "/dev/video%d", &idx)
+			if err != nil {
+				continue
+			}
+			cd.Index = idx
+		}
+
+		*data = append(*data, &cd)
+	}
+
+	return nil
+}
+
+func (lab *Lab) GetVideoStream(device *string, info *CamStreamData) error {
+	out, err := exec.Command("mjpgcmdline.sh").Output()
+	if err != nil {
+		return errors.New("List videos failed: " + err.Error())
+	}
+
+	// Init struct
+	csd := CamStreamData{
+		0,
+		"",
+		-1,
+		8090,
+	}
+
+	var iinp int
+	var idx uint
+	var pnum uint
+
+	// Parse output for video devices info
+	buf := bytes.NewBuffer(out)
+	lines := strings.Split(buf.String(), "\n")
+	iinp = 0
+	for _, s := range lines {
+		if strings.Contains(s, "input_uvc.so") {
+			// Input uvc plugin args
+			iinp++;
+
+			args := strings.Split(s, " ")
+			dname := ""
+			for _, arg := range args {
+				if !strings.HasPrefix(arg, "/dev/video") {
+					continue
+				} else {
+					dname = arg
+					break
+				}
+			}
+			// Use only given device names (not used /dev/video0 by default)
+			// and skip non requested devices
+			if dname == "" || dname != *device {
+				continue
+			}
+			csd.Device = dname
+
+			// Get device index
+			_, err := fmt.Sscanf(csd.Device, "/dev/video%d", &idx)
+			if err != nil {
+				continue
+			}
+			csd.Index = idx
+			csd.Stream = iinp - 1
+
+		} else if strings.Contains(s, "output_http.so") {
+			// Output http plugin args
+
+			args := strings.Split(s, " ")
+			pnum = 0
+			for i, arg := range args {
+				if arg != "-p" && arg != "--port" {
+					continue
+				} else {
+					// If exists port number after prefix (parse last args string part)
+					_, err := fmt.Sscanf(strings.Join(args[i:], " "), "%d", &idx)
+					if err != nil {
+						// Not set port number
+						break
+					}
+					pnum = idx
+					break
+				}
+			}
+			if pnum > 0 {
+				csd.Port = pnum
+			}
+
+			continue
+		} else {
+			continue
+		}
+	}
+
+	*info = csd
+
+	return nil
+}
+
+func (lab *Lab) StartVideoStream(device *string, ok *bool) error {
+	*ok = true
+
+	// Get currect streaming configuration
+	out, err := exec.Command("mjpgcmdline.sh").Output()
+	if err != nil {
+		*ok = false
+		return errors.New("List videos failed: " + err.Error())
+	}
+
+	devices := make([]string, 0)
+
+	// Parse output for video devices info
+	buf := bytes.NewBuffer(out)
+	lines := strings.Split(buf.String(), "\n")
+	exist := false
+	for _, s := range lines {
+		if strings.Contains(s, "input_uvc.so") {
+			// Input uvc plugin args
+
+			args := strings.Split(s, " ")
+			dname := ""
+			for _, arg := range args {
+				if !strings.HasPrefix(arg, "/dev/video") {
+					continue
+				} else {
+					dname = arg
+					break
+				}
+			}
+			// Match only given device names (dont check /dev/video0 as default)
+			// and skip unknown devices
+			if dname == "" {
+				continue
+			}
+
+			// Collect enabled devices and check if exixts requested device
+			devices = append(devices, dname)
+			if dname == *device {
+				exist = true
+			}
+		}
+	}
+
+	if !exist {
+		devices = append(devices, *device)
+	}
+
+	if len(devices) == 0 {
+		*ok = false
+		return errors.New("Empty cameras list: ")
+	}
+
+	sargs := make([]string, 0)
+	sargs = append(sargs, "mjpg_streamer", "start")
+	sargs = append(sargs, devices...)
+
+	// Restart service with new streaming devices
+	_, err = exec.Command("service", sargs...).Output()
+	if err != nil {
+		*ok = false
+		return errors.New("Error restart video streaming service : " + err.Error())
+	}
+
+	return nil
+}
+
+func (lab *Lab) StartVideoStreamAll(ptr uintptr, ok *bool) error {
+	*ok = true
+
+	sargs := make([]string, 0)
+	sargs = append(sargs, "mjpg_streamer", "start")
+
+	// Restart service with new streaming devices
+	_, err := exec.Command("service", sargs...).Output()
+	if err != nil {
+		*ok = false
+		return errors.New("Error start video streaming service : " + err.Error())
+	}
+
+	return nil
+}
+
+func (lab *Lab) StopVideoStream(device *string, ok *bool) error {
+	*ok = true
+
+	// Get currect streaming configuration
+	out, err := exec.Command("mjpgcmdline.sh").Output()
+	if err != nil {
+		*ok = false
+		return errors.New("List videos failed: " + err.Error())
+	}
+
+	devices := make([]string, 0)
+
+	// Parse output for video devices info
+	buf := bytes.NewBuffer(out)
+	lines := strings.Split(buf.String(), "\n")
+	exist := false
+	for _, s := range lines {
+		if strings.Contains(s, "input_uvc.so") {
+			// Input uvc plugin args
+
+			args := strings.Split(s, " ")
+			dname := ""
+			for _, arg := range args {
+				if !strings.HasPrefix(arg, "/dev/video") {
+					continue
+				} else {
+					dname = arg
+					break
+				}
+			}
+			// Match only given device names (dont check /dev/video0 as default)
+			// and skip unknown devices
+			if dname == "" {
+				continue
+			}
+
+			// Collect enabled devices and skip requested to stop 
+			if dname == *device {
+				exist = true
+			} else {
+				devices = append(devices, dname)
+			}
+		}
+	}
+
+	// Not found device to stop streaming, already stopped?!
+	if !exist {
+		return nil
+	}
+
+	sargs := make([]string, 0)
+	if len(devices) == 0 {
+		// Just stops the service if no devices
+		sargs = append(sargs, "mjpg_streamer", "stop")
+	} else {
+		// XXX: Must be "start" action to stop-and-start with new devices
+		sargs = append(sargs, "mjpg_streamer", "start")
+		sargs = append(sargs, devices...)
+	}
+
+	// Stop/Start service with new streaming devices
+	_, err = exec.Command("service", sargs...).Output()
+	if err != nil {
+		*ok = false
+		return errors.New("Error stop video streaming service : " + err.Error())
+	}
+
+	return nil
+}
+
+func (lab *Lab) StopVideoStreamAll(ptr uintptr, ok *bool) error {
+	*ok = true
+
+	sargs := make([]string, 0)
+	sargs = append(sargs, "mjpg_streamer", "stop")
+
+	// Stop service with all streaming devices
+	_, err := exec.Command("service", sargs...).Output()
+	if err != nil {
+		*ok = false
+		return errors.New("Error stop video streaming service : " + err.Error())
 	}
 
 	return nil
