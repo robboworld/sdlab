@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
+	"fmt"
 )
 
 type User int
@@ -192,7 +193,7 @@ func sensorFromYAML(sensorYAML SensorYAML) (sensor *Sensor, err error) {
 }
 
 func loadSensors(path string) (err error) {
-	files, err := filepath.Glob(config.SensorsPath + "/*.yml")
+	files, err := filepath.Glob(path + "/*.yml")
 	if err != nil {
 		return err
 	}
@@ -222,7 +223,10 @@ func loadSensors(path string) (err error) {
 func loadConfig(path string) (err error) {
 	yml, err := ioutil.ReadFile(path)
 	if err != nil {
-		logger.Printf("Error reading file `%s': %s", path, err)
+		errf := fmt.Errorf("Error reading file `%s': %s", path, err)
+		if errf != nil {
+			return errf
+		}
 	}
 	err = yaml.Unmarshal(yml, &config)
 	if config.Socket.Path == "" {

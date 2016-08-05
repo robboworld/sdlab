@@ -41,7 +41,7 @@ func init() {
 func main() {
 	err := loadConfig(configPath)
 	if err != nil {
-		// logger is nil ATM
+		// logger still is nil
 		log.Fatal("Error loading configuration: %s", err)
 	}
 	logger, err = openLog()
