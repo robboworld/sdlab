@@ -39,7 +39,9 @@ func init() {
 }
 
 func main() {
-	err := loadConfig(configPath)
+	var err error
+
+	err = loadConfig(configPath)
 	if err != nil {
 		// logger still is nil
 		log.Fatal("Error loading configuration: %s", err)
@@ -56,10 +58,35 @@ func main() {
 	if err != nil {
 		logger.Fatal(err)
 	}
+
+	// Database prepare
+
+	db, err := initDB(config.Database)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	defer db.Close()
+
+	err = initQueries()
+	defer cleanupQueries()
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	err = prepareDB()
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	// Run monitors
+
 	err = loadRunMonitors()
 	if err != nil {
 		logger.Print("Error running monitor: " + err.Error())
 	}
+
+	// Start API and listeners
+
 	listeners, err := startAPI()
 	if err != nil {
 		logger.Fatal(err)

@@ -100,7 +100,7 @@ func busFromString(str string) (Bus, error) {
 	case "i2c", "iic", "twi":
 		return I2C, nil
 	}
-	return Bus(-1), errors.New("wrong bus: `" + str + "'")
+	return Bus(-1), errors.New("wrong bus: '" + str + "'")
 }
 
 func (typ ValueType) String() string {
@@ -182,7 +182,7 @@ func (sensor Sensor) Search() (PluggedSensors, error) {
 		found, err := filepath.Glob(pattern)
 		if err != nil {
 			err = fmt.Errorf(
-				"Can not expand glob `%s': %s",
+				"Cannot expand glob '%s': %s",
 				pattern, err,
 			)
 			return nil, err
@@ -197,7 +197,7 @@ func (sensor Sensor) Search() (PluggedSensors, error) {
 				&typ, &addr,
 			)
 			if n != 2 || e != nil {
-				logger.Panic("Error parsing 1-Wire slave file name `" + found[i] + "'")
+				logger.Panic("Error parsing 1-Wire slave file name '" + found[i] + "'")
 			}
 			addr = addr << 8
 			addr = addr | typ
@@ -246,8 +246,7 @@ func (sensor Sensor) Search() (PluggedSensors, error) {
 					continue
 				}
 			}
-			id := fmt.Sprintf("%s-%x:%x",
-				sensor.Name, config.I2C.Buses[i], sensor.Device.Id)
+			id := fmt.Sprintf("%s-%x:%x", sensor.Name, config.I2C.Buses[i], sensor.Device.Id)
 			detected[id] = &PluggedSensor{addr, &sensor}
 			logger.Printf("Detected I2C sensor %s at bus 0x%x, address 0x%x; assigned ID %s\n",
 				sensor.Name, config.I2C.Buses[i], sensor.Device.Id, id,
@@ -289,7 +288,7 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 		s, err = ioutil.ReadFile(sensor.Values[n].File)
 		if err != nil {
 			err = fmt.Errorf(
-				"Can not read file `%s': %s",
+				"Cannot read file '%s': %s",
 				sensor.Values[n].File, err,
 			)
 			return 0.0, err
@@ -321,7 +320,7 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 		}
 		s, err = ioutil.ReadFile(file)
 		if err != nil {
-			err = fmt.Errorf("Can not read file `%s': %s", file, err)
+			err = fmt.Errorf("Cannot read file '%s': %s", file, err)
 			return 0.0, err
 		}
 	}
@@ -335,12 +334,19 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 		data, err = strconv.ParseFloat(string(strdata[1]), 64)
 	}
 	if err != nil {
-		return math.NaN(), errors.New("Can not parse data: " + err.Error())
+		return math.NaN(), errors.New("Cannot parse data: " + err.Error())
 	}
 	if math.IsNaN(data) {
-		return math.NaN(), errors.New("Can not parse data: NaN")
+		return math.NaN(), errors.New("Cannot parse data: NaN")
 	}
+
 	data = data*sensor.Values[n].Multiplier + sensor.Values[n].Addend
+
+	// check range
+	if data < sensor.Values[n].Range.Min || data > sensor.Values[n].Range.Max {
+		return math.NaN(), errors.New("Data value out of range: NaN")
+	}
+
 	return data, nil
 }
 
@@ -359,15 +365,16 @@ func scanSensors() (err error) {
 	return nil
 }
 
-// valueAvailable take sensor ID and value index and returns true if such
-// a sensor exists and has a value with such index, or false otherwise.
-func valueAvailable(s string, v int) bool {
+// valueAvailable take sensor ID and value index and
+// returns true if such a sensor exists and has a value with such index, or false otherwise,
+// returns if false than the error code > 0: unknown sensor (1) or sensor value(2), else 0
+func valueAvailable(s string, v int) (ok bool, errcode int) {
 	_, ok := pluggedSensors[s]
 	if !ok {
-		return false
+		return false, 1
 	}
 	if v >= len(pluggedSensors[s].Values) || v < 0 {
-		return false
+		return false, 2
 	}
-	return true
+	return true, 0
 }

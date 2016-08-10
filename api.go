@@ -94,6 +94,11 @@ type MonFetchOpts struct {
 	Step  time.Duration
 }
 
+type MonRemoveOpts struct {
+	UUID     string
+	WithData bool
+}
+
 type TimeSetOpts struct {
 	TZ       string
 	Datetime time.Time
@@ -147,7 +152,7 @@ func (sd SerData) MarshalJSON() ([]byte, error) {
 
 func (lab *Lab) GetData(valueId *ValueId, value *Data) (err error) {
 	(*value).Time = time.Now()
-	if !valueAvailable((*valueId).Sensor, (*valueId).ValueIdx) {
+	if ok, _ := valueAvailable((*valueId).Sensor, (*valueId).ValueIdx); !ok {
 		return errors.New("Wrong sensor spec")
 	}
 	(*value).Reading, err = pluggedSensors[(*valueId).Sensor].GetData((*valueId).ValueIdx)
@@ -222,7 +227,6 @@ func (lab *Lab) StartMonitor(opts *MonitorOpts, uuid *string) error {
 	if err != nil {
 		return err
 	}
-	monitors[string(mon.UUID)] = mon
 	*uuid = mon.UUID.String()
 	return nil
 }
@@ -244,6 +248,9 @@ func (lab *Lab) StopMonitor(u *string, ok *bool) error {
 
 func (lab *Lab) ListMonitors(ptr uintptr, result *[]APIMonitor) error {
 	*result = make([]APIMonitor, 0)
+
+	// TODO: sync list monitors with monitor info
+
 	for _, v := range monitors {
 		m := APIMonitor{
 			v.Active,
@@ -271,6 +278,9 @@ func (lab *Lab) GetMonInfo(u *string, info *MonitorInfo) error {
 	if !exist {
 		return errors.New("Wrong monitor UUID: " + *u)
 	}
+
+	// TODO: sync list monitors with monitor info
+
 	i, err := mon.Info()
 	if err != nil {
 		return err
@@ -279,14 +289,14 @@ func (lab *Lab) GetMonInfo(u *string, info *MonitorInfo) error {
 	return nil
 }
 
-func (lab *Lab) RemoveMonitor(u *string, ok *bool) error {
+func (lab *Lab) RemoveMonitor(opts *MonRemoveOpts, ok *bool) error {
 	*ok = true
-	mon, exist := monitors[string(uuid.Parse(*u))]
+	mon, exist := monitors[string(uuid.Parse(opts.UUID))]
 	if !exist {
 		*ok = false
-		return errors.New("Wrong monitor UUID: " + *u)
+		return errors.New("Wrong monitor UUID: " + opts.UUID)
 	}
-	err := mon.Remove()
+	err := mon.Remove(opts.WithData)
 	if err != nil {
 		*ok = false
 	}
@@ -298,24 +308,43 @@ func (lab *Lab) GetMonData(opts *MonFetchOpts, data *[]*SerData) error {
 	if !exist {
 		return errors.New("Wrong monitor UUID: " + opts.UUID)
 	}
+
 	fr, err := mon.Fetch(opts.Start, opts.End, opts.Step)
 	if err != nil {
 		return err
 	}
-	defer fr.FreeValues()
+
+	// collect plain fetched results to series rows
 	*data = make([]*SerData, 0, fr.RowCnt)
 	nvals := len(fr.DsNames)
-	row := 0
-	for t := fr.Start; t.Before(fr.End) || t.Equal(fr.End); t = t.Add(fr.Step) {
-		d := SerData{
-			t,
-			make([]float64, nvals),
+	pasttm := time.Time
+	var d *SerData
+	added := false
+	for i, _ := range fr.DsData {
+		tm := fr.DsData[i].Time
+
+		// new series data on new time
+		if i = 0 || !tm.Equal(pasttm) {
+			d = &SerData{
+				tm,
+				make([]float64, nvals),
+			}
+			pasttm = tm
+			added = false
 		}
-		for ds := range d.Readings {
-			d.Readings[ds] = fr.ValueAt(ds, row)
+
+		// copy found reading
+		for j, dn := range fr.DsNames {
+			if fr.DsData[i].Name == dn {
+				d.Readings[j] = fr.DsData[i].detection
+			}
 		}
-		*data = append(*data, &d)
-		row++
+
+		// add collected row
+		if !added {
+			*data = append(*data, d)
+			added = true
+		}
 	}
 	return nil
 }

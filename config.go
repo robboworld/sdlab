@@ -59,6 +59,11 @@ type MonitorConf struct {
 	Path string
 }
 
+type DatabaseConf struct {
+	Type string
+	Dsn  string
+}
+
 type Config struct {
 	Socket      SocketConf
 	TCP         TCPConf
@@ -66,6 +71,7 @@ type Config struct {
 	I2C         I2CConf
 	Series      SeriesConf
 	Monitor     MonitorConf
+	Database    DatabaseConf
 	Log         string
 }
 
@@ -143,7 +149,7 @@ func valueFromYAML(valueYAML ValueYAML) (value *Value, err error) {
 	} else {
 		re, err = regexp.Compile(valueYAML.Re)
 		if err != nil {
-			logger.Printf("Error compiling regexp `%s': %s", valueYAML.Re, err)
+			logger.Printf("Error compiling regexp '%s': %s", valueYAML.Re, err)
 		}
 	}
 	if math.Abs(valueYAML.Multiplier) > math.SmallestNonzeroFloat64 {
@@ -201,18 +207,18 @@ func loadSensors(path string) (err error) {
 	for i := range files {
 		yml, err := ioutil.ReadFile(files[i])
 		if err != nil {
-			logger.Printf("Error reading file `%s': %s", files[i], err)
+			logger.Printf("Error reading file '%s': %s", files[i], err)
 			continue
 		}
 		var sensorYAML SensorYAML
 		err = yaml.Unmarshal(yml, &sensorYAML)
 		if err != nil {
-			logger.Printf("Error parsing file `%s': %s", files[i], err)
+			logger.Printf("Error parsing file '%s': %s", files[i], err)
 			continue
 		}
 		sensor, err := sensorFromYAML(sensorYAML)
 		if err != nil {
-			logger.Printf("Error reading configuration from file `%s': %s", files[i], err)
+			logger.Printf("Error reading configuration from file '%s': %s", files[i], err)
 			continue
 		}
 		sensors = append(sensors, *sensor)
@@ -223,7 +229,7 @@ func loadSensors(path string) (err error) {
 func loadConfig(path string) (err error) {
 	yml, err := ioutil.ReadFile(path)
 	if err != nil {
-		errf := fmt.Errorf("Error reading file `%s': %s", path, err)
+		errf := fmt.Errorf("Error reading file '%s': %s", path, err)
 		if errf != nil {
 			return errf
 		}
@@ -244,5 +250,20 @@ func loadConfig(path string) (err error) {
 	if config.Monitor.Path == "" {
 		config.Monitor.Path = "/var/lib/sdlab/monitor"
 	}
+	if config.Database.Type == "" {
+		config.Database.Type = "sqlite"
+	}
+	if config.Database.Dsn == "" {
+		switch config.Database.Type {
+		case "sqlite":
+			// Format: dbname[?param1=value1&...&paramN=valueN]
+			config.Database.Dsn = "/data/sdlab.db"
+
+		case "mysql":
+			// Format: [username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
+			config.Database.Dsn = "sdlab:sdlab@/sdlab"
+		}
+	}
+
 	return err
 }
