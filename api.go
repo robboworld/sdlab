@@ -68,10 +68,12 @@ type SeriesOpts struct {
 }
 
 type MonitorOpts struct {
-	Values []ValueId
-	Step   uint
-	Count  uint
-	StopAt time.Time
+	Exp_id   int
+	Setup_id int
+	Step     uint         // Interval
+	Count    uint         // Amount?
+	StopAt   time.Time
+	Values   []ValueId
 }
 
 type APIMonValue struct {
@@ -317,14 +319,14 @@ func (lab *Lab) GetMonData(opts *MonFetchOpts, data *[]*SerData) error {
 	// collect plain fetched results to series rows
 	*data = make([]*SerData, 0, fr.RowCnt)
 	nvals := len(fr.DsNames)
-	pasttm := time.Time
+	var pasttm time.Time
 	var d *SerData
 	added := false
 	for i, _ := range fr.DsData {
 		tm := fr.DsData[i].Time
 
 		// new series data on new time
-		if i = 0 || !tm.Equal(pasttm) {
+		if i == 0 || !tm.Equal(pasttm) {
 			d = &SerData{
 				tm,
 				make([]float64, nvals),
@@ -336,7 +338,7 @@ func (lab *Lab) GetMonData(opts *MonFetchOpts, data *[]*SerData) error {
 		// copy found reading
 		for j, dn := range fr.DsNames {
 			if fr.DsData[i].Name == dn {
-				d.Readings[j] = fr.DsData[i].detection
+				d.Readings[j] = fr.DsData[i].Detection
 			}
 		}
 

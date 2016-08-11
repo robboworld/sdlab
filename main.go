@@ -67,7 +67,7 @@ func main() {
 	}
 	defer db.Close()
 
-	err = initQueries()
+	err = initQueries(config.Database.Type)
 	defer cleanupQueries()
 	if err != nil {
 		logger.Fatal(err)

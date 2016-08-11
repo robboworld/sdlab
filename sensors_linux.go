@@ -369,7 +369,7 @@ func scanSensors() (err error) {
 // returns true if such a sensor exists and has a value with such index, or false otherwise,
 // returns if false than the error code > 0: unknown sensor (1) or sensor value(2), else 0
 func valueAvailable(s string, v int) (ok bool, errcode int) {
-	_, ok := pluggedSensors[s]
+	_, ok = pluggedSensors[s]
 	if !ok {
 		return false, 1
 	}

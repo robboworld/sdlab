@@ -24,16 +24,13 @@ import (
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"database/sql"
-	"gopkg.in/yaml.v1"
-	"io/ioutil"
-	"os"
-	"path/filepath"
 	"strconv"
 	"time"
+	"strings"
 )
 
 const (
-	RFC3339_UTC     = 'Y-m-d\TH:i:s\Z'
+	RFC3339_UTC      = "2006-01-02T15:04:05Z"
 	RFC3339NANO3_UTC = "2006-01-02T15:04:05.999Z"
 )
 
@@ -335,7 +332,7 @@ func prepareDB() error {
 		return nil
 	}
 
-	_, err = db.Exec(queries["_pre"])
+	_, err := db.Exec(queries["_pre"])
 	if err != nil {
 		return err
 	}
@@ -362,9 +359,6 @@ func monitorToDB(mon *Monitor) (monDBi *MonitorDBItem, err error) {
 }
 
 func monitorFromDB(mondbi *MonitorDBItem) (mon *Monitor, err error) {
-
-	var err error
-
 	uuid := uuid.Parse(mondbi.UUID)
 	created, err := time.Parse(time.RFC3339Nano, mondbi.Created)
 	if err != nil {
@@ -407,21 +401,20 @@ func monitorFromDB(mondbi *MonitorDBItem) (mon *Monitor, err error) {
 		mondbi.Active,
 		nil,
 		mondbi.Values,
-		nil,
 	}
 	return mon, nil
 }
 
 // loadMonitor reads database item and creates a new Monitor
 // object.
-func loadMonitor(tx *Tx, monid int) (*Monitor, error) {
+func loadMonitor(tx *sql.Tx, monid int) (*Monitor, error) {
 	var err, err2 error
 
 	mondbi := MonitorDBItem{}
 	mondbi.Values = make([]MonValue, 0)
 
 	// Load Monitor
-	row := tx.Stmt(queries["monitors_select_by_id"]).QueryRow(monid)
+	row := tx.Stmt(stmts["monitors_select_by_id"]).QueryRow(monid)
 	err = row.Scan(
 		&mondbi.Id,
 		&mondbi.UUID,
@@ -430,7 +423,7 @@ func loadMonitor(tx *Tx, monid int) (*Monitor, error) {
 		&mondbi.Step,
 		&mondbi.Remind,
 		&mondbi.Created,
-		&mondbi.StopAt
+		&mondbi.StopAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -450,7 +443,7 @@ func loadMonitor(tx *Tx, monid int) (*Monitor, error) {
 	}
 
 	// Load Monitor Values
-	rows, err := tx.Stmt(queries["monitors_values_select_by_uuid"]).Query(mondbi.UUID)
+	rows, err := tx.Stmt(stmts["monitors_values_select_by_uuid"]).Query(mondbi.UUID)
 	if err != nil {
 		//fmt.Printf(LPURPLE+"loadMonitor#%05d:"+RED+" Fatal Monitor UUID %s Values Stmt Query %s, continue\n"+NCO, monid, mondbi.UUID, err)
 		logger.Print("Fatal Monitor UUID %s Values Stmt Query: ", mondbi.UUID, err.Error())
@@ -489,6 +482,8 @@ func loadMonitor(tx *Tx, monid int) (*Monitor, error) {
 	if err == nil && mon.Active {
 		err = mon.Run()
 	}
+
+	return mon, err
 }
 
 // loadRunMonitors looks for saved monitors, loads them and run those having
@@ -503,7 +498,7 @@ func loadRunMonitors() error {
 	}
 
 	// Count monitors
-	row := tx.Stmt(queries["count"]).QueryRow()
+	row := tx.Stmt(stmts["count"]).QueryRow()
 	var count int64 = 0
 	err = row.Scan(&count)
 	if err != nil {
@@ -526,7 +521,7 @@ func loadRunMonitors() error {
 	monitors = make(map[string]*Monitor, count)
 
 	// Load monitors
-	rows, err := tx.Stmt(queries["monitors_select_all_id"]).Query()
+	rows, err := tx.Stmt(stmts["monitors_select_all_id"]).Query()
 	if err != nil {
 		//fmt.Printf(LPURPLE+"loadRunMonitors:"+RED+" Fatal Monitor All Ids Stmt Query %s, exiting\n"+NCO, err)
 		logger.Print("Fatal Monitor All Ids Stmt Query: " + err.Error())
@@ -582,8 +577,8 @@ func loadRunMonitors() error {
 		
 		uuids = append(uuids, string(mon.UUID))
 	}
-	//fmt.Printf(LPURPLE+"loadRunMonitors#%-23s:"+NCO+" Count Monitors %d Rows %s\n", time.Now().Format(RFC3339NANO3_UTC), count, strings.join(uuids, ", "))
-	logger.Printf("Count Monitors %d Rows %s\n", count, strings.join(uuids, ", "))
+	//fmt.Printf(LPURPLE+"loadRunMonitors#%-23s:"+NCO+" Count Monitors %d Rows %s\n", time.Now().Format(RFC3339NANO3_UTC), count, strings.Join(uuids, ", "))
+	logger.Printf("Count Monitors %d Rows %s\n", count, strings.Join(uuids, ", "))
 
 	// CLOSE ROWS HERE!???
 	//rows.Close()
@@ -600,7 +595,7 @@ func loadRunMonitors() error {
 
 // initDB(config.Database) initialize database instance, loads them and run those having
 // state active.
-func initDB(dbconf *DatabaseConf) (*sql.DB, error) {
+func initDB(dbconf DatabaseConf) (*sql.DB, error) {
 	var dbo *sql.DB
 	var err error
 
@@ -646,7 +641,7 @@ func (mon *Monitor) Run() error {
 				mon.Stop()
 			}
 			if len(mon.stop) > 0 {
-				return nil
+				return
 			}
 			for i, v := range mon.Values {
 				go getSerData(v.Sensor, v.ValueIdx, readings[i])
@@ -674,18 +669,23 @@ func (mon *Monitor) Update(vals ...interface{}) error {
 		*/
 		return nil
 	}
-	
+
 	// TODO: Drop bad Sensor values : min-max check?
+	var nulltime time.Time
+	tm, ok := vals[0].(time.Time)
+	if !ok {
+		tm = nulltime
+	}
 
 	det := DetectionDBItem{
-		Id:             nil,
+		Id:             0,
 		Exp_id:         mon.Exp_id,
 		Mon_id:         mon.Id,
-		Time:           time.Time(vals[0]).Format(RFC3339NANO3_UTC),
-		Sensor_id:      ""
-		Sensor_val_id:  0
-		Detection:      0
-		Error:          ""  // TODO: remode old error field
+		Time:           tm.Format(RFC3339NANO3_UTC),
+		Sensor_id:      "",
+		Sensor_val_id:  0,
+		Detection:      0,
+		Error:          "",  // TODO: remode old error field
 	}
 
 	tx, err := db.Begin()
@@ -710,7 +710,7 @@ func (mon *Monitor) Update(vals ...interface{}) error {
 			mon.Values[i-1].Sensor,
 			mon.Values[i-1].ValueIdx,
 			v,
-			""
+			"",
 		)
 	}
 	sqlInsert = strings.TrimSuffix(sqlInsert, ",")
@@ -722,7 +722,8 @@ func (mon *Monitor) Update(vals ...interface{}) error {
 	}
 
 	// Execute
-	res, err := stmt.Exec(values...)
+	//res, err := stmt.Exec(values...)
+	_, err = stmt.Exec(values...)
 	if err != nil {
 		return err
 	}
@@ -765,8 +766,8 @@ func (mon *Monitor) Save() error {
 	}
 
 	// Insert / Update monitor
-	if monDBi.Id {
-		res, err := tx.Stmt(queries["monitors_replace"]).Exec(
+	if monDBi.Id > 0 {
+		_, err = tx.Stmt(stmts["monitors_replace"]).Exec(
 			monDBi.Id,
 			monDBi.UUID,
 			monDBi.Exp_id,
@@ -775,10 +776,10 @@ func (mon *Monitor) Save() error {
 			monDBi.Remind,
 			monDBi.Created,
 			monDBi.StopAt,
-			monDBi.Active
+			monDBi.Active,
 		)
 	} else {
-		res, err := tx.Stmt(queries["monitors_insert"]).Exec(
+		_, err = tx.Stmt(stmts["monitors_insert"]).Exec(
 			monDBi.UUID,
 			monDBi.Exp_id,
 			monDBi.Setup_id,
@@ -786,7 +787,7 @@ func (mon *Monitor) Save() error {
 			monDBi.Remind,
 			monDBi.Created,
 			monDBi.StopAt,
-			monDBi.Active
+			monDBi.Active,
 		)
 	}
 	if err != nil {
@@ -796,7 +797,7 @@ func (mon *Monitor) Save() error {
 	// Save Monitor Values
 	sqlInsert := queries["_monitors_values_replace_into"] + " VALUES "
 	values := []interface{}{}
-	for i, monv := range monDBi.Values {
+	for _, monv := range monDBi.Values {
 		sqlInsert += queries["_monitors_values_replace_values"] + ","
 		values = append(values,
 			monDBi.UUID,
@@ -814,7 +815,8 @@ func (mon *Monitor) Save() error {
 	}
 
 	// Execute
-	res, err := stmt.Exec(values...)
+	//res, err := stmt.Exec(values...)
+	_, err = stmt.Exec(values...)
 	if err != nil {
 		return err
 	}
@@ -843,8 +845,8 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 	}
 
 	// Count grouped detections
-	row := tx.Stmt(queries["detections_count_by_monitor_grouptime"]).QueryRow(mon.Id)
-	var alen int64 = 0
+	row := tx.Stmt(stmts["detections_count_by_monitor_grouptime"]).QueryRow(mon.Id)
+	var alen uint = 0
 	err = row.Scan(&alen)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -864,9 +866,9 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 	}
 
 	// Get last detection time
-	row := tx.Stmt(queries["detections_select_last_time_by_monitor"]).QueryRow(mon.Id)
-	var lasttxt string = ""
-	var last time.Time
+	row = tx.Stmt(stmts["detections_select_last_time_by_monitor"]).QueryRow(mon.Id)
+	var nulltime time.Time
+	lasttxt, last := "", nulltime
 	err = row.Scan(&lasttxt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -885,12 +887,7 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 		}
 	}
 	if lasttxt != "" {
-		last, err := time.Parse(time.RFC3339Nano, lasttxt)
-		if err != nil {
-			last = nil
-		}
-	} else {
-		last = nil
+		last, _ = time.Parse(time.RFC3339Nano, lasttxt)
 	}
 
 	n := 1  // number of archives, only one archive now, no step multiplied stores on Step*2, Step*4, Step*16, and etc.
@@ -903,15 +900,15 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 	}
 
 	// Get Values data
-	var vlen int64
+	var vlen uint
 	vi := make([]MonValueInfo, len(mon.Values))
-	for i = range vi {
+	for i := range vi {
 		// Count separate Values
 		vlen = 0
-		row = tx.Stmt(queries["detections_count_by_monitor_sensor_grouptime"]).QueryRow(
+		row = tx.Stmt(stmts["detections_count_by_monitor_sensor_grouptime"]).QueryRow(
 			mon.Id,
 			mon.Values[i].Sensor,
-			mon.Values[i].ValueIdx
+			mon.Values[i].ValueIdx,
 		)
 		err = row.Scan(&vlen)
 		if err != nil {
@@ -932,9 +929,9 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 		}
 
 		vi[i] = MonValueInfo{
-			v.Name,
-			v.Sensor,
-			v.ValueIdx,
+			mon.Values[i].Name,
+			mon.Values[i].Sensor,
+			mon.Values[i].ValueIdx,
 			vlen,
 		}
 	}
@@ -956,7 +953,7 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 	return mi, nil
 }
 
-func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (FetchResultDB, error) {
+func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResultDB, error) {
 	var err, err2 error
 
 	tx, err := db.Begin()
@@ -982,7 +979,7 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (FetchResult
 	var tm, sensor_id, derror string;
 
 	// Load detections
-	rows, err := tx.Stmt(queries["detections_select_by_monitor_time_range"]).Query(
+	rows, err := tx.Stmt(stmts["detections_select_by_monitor_time_range"]).Query(
 		mon.Id,
 		start.Format(time.RFC3339Nano),
 		end.Format(time.RFC3339Nano),
@@ -1039,7 +1036,7 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (FetchResult
 	fr.RowCnt = len(fr.DsData)
 
 	for i := range fr.DsNames {
-		fr.DsNames[i] = append(fr.DsNames, mon.Values[i].Name);
+		fr.DsNames[i] = mon.Values[i].Name;
 	}
 
 	return fr, err
@@ -1047,7 +1044,7 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (FetchResult
 
 func (mon *Monitor) Remove(wdata bool) error {
 	var err,err2 error
-	var res Result
+	//var res sql.Result
 
 	if mon.Active {
 		err = mon.Stop()
@@ -1064,7 +1061,7 @@ func (mon *Monitor) Remove(wdata bool) error {
 
 	// Delete monitor detections data
 	if wdata {
-		res, err = tx.Stmt(queries["detections_delete_by_monitor"]).Exec(mon.Id))
+		_, err = tx.Stmt(stmts["detections_delete_by_monitor"]).Exec(mon.Id)
 		if err != nil {
 			logger.Print("error removing monitor data: " + err.Error())
 		}
@@ -1072,18 +1069,18 @@ func (mon *Monitor) Remove(wdata bool) error {
 
 	// Delete monitor values
 	mon.Values = nil
-	res, err = tx.Stmt(queries["monitors_values_delete_by_uuid"]).Exec(mon.UUID.String())
+	_, err = tx.Stmt(stmts["monitors_values_delete_by_uuid"]).Exec(mon.UUID.String())
 	if err != nil {
 		logger.Print("error removing monitor values: " + err.Error())
 	}
 
 	// Delete monitor
-	res, err = tx.Stmt(queries["monitors_delete_by_id"]).Exec(mon.Id)
+	_, err = tx.Stmt(stmts["monitors_delete_by_id"]).Exec(mon.Id)
 	if err != nil {
 		logger.Print("error removing monitor configuration: " + err.Error())
 	}
 
-	if err {
+	if err != nil {
 		err2 = tx.Rollback()
 		if err2 != nil {
 			//fmt.Printf(LPURPLE+"Remove:"+RED+" Fatal Rollback Monitor Remove %s, exiting\n"+NCO, err2)
@@ -1148,9 +1145,7 @@ func newMonitor(opts *MonitorOpts) (*Monitor, error) {
 		opts.StopAt,
 		true,
 		nil,
-
 		vals,
-		nil,
 	}
 
 	return &mon, nil
