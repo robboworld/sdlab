@@ -19,7 +19,7 @@
 package main
 
 import (
-	"code.google.com/p/go-uuid/uuid"
+	"github.com/pborman/uuid"
 	"errors"
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
