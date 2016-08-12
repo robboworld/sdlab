@@ -291,7 +291,7 @@ func initQueries(dbtype string) error {
 		ORDER BY strftime('%s', time) DESC, strftime('%f', time) DESC
 		LIMIT 1;
 	`
-	queries["_detections_insert"] = `
+	queries["detections_insert"] = `
 		INSERT INTO detections(exp_id, mon_id, time, sensor_id, sensor_val_id, detection, error)
 		VALUES (?, ?, ?, ?, ?, ?, ?);
 	`
@@ -306,7 +306,7 @@ func initQueries(dbtype string) error {
 	stmts = make(map[string]*sql.Stmt)
 
 	for qname, value := range queries {
-		if string(value[0]) == "_" {
+		if string([]rune(qname)[0]) == "_" {
 			continue
 		}
 		stmts[qname], err = db.Prepare(value)
@@ -492,13 +492,15 @@ func loadRunMonitors() error {
 	var err, err2 error
 	var monid int = 0
 
+	logger.Print("Loading monitors...")
+
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 
 	// Count monitors
-	row := tx.Stmt(stmts["count"]).QueryRow()
+	row := tx.Stmt(stmts["monitors_count"]).QueryRow()
 	var count int64 = 0
 	err = row.Scan(&count)
 	if err != nil {
@@ -578,7 +580,7 @@ func loadRunMonitors() error {
 		uuids = append(uuids, string(mon.UUID))
 	}
 	//fmt.Printf(LPURPLE+"loadRunMonitors#%-23s:"+NCO+" Count Monitors %d Rows %s\n", time.Now().Format(RFC3339NANO3_UTC), count, strings.Join(uuids, ", "))
-	logger.Printf("Count Monitors %d Rows %s\n", count, strings.Join(uuids, ", "))
+	logger.Printf("Found %d monitors: [%s]\n", count, strings.Join(uuids, ", "))
 
 	// CLOSE ROWS HERE!???
 	//rows.Close()
@@ -599,21 +601,34 @@ func initDB(dbconf DatabaseConf) (*sql.DB, error) {
 	var dbo *sql.DB
 	var err error
 
+	logger.Print("Connect database...")
+
 	switch dbconf.Type {
 	case "sqlite":
 		dbo, err = sql.Open("sqlite3", dbconf.Dsn)
 		if err != nil {
-			return dbo, err
+			return nil, err
 		}
 		if dbo == nil {
 			err = errors.New("Database in nil")
 			if err != nil {
-				return dbo, err
+				return nil, err
 			}
 		}
 
+		// TODO: Check connection (cannot use Ping() with sqlite, cannot test file exists instead of DSN string params)
+
 	case "mysql":
 		// Todo: add instantiate mysql database
+
+		/*
+		// Check connection
+		err = dbo.Ping()
+		if err != nil {
+			return nil, err
+		}
+		*/
+
 		fallthrough
 
 	default:

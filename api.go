@@ -35,7 +35,11 @@ import (
 )
 
 type Lab struct {
-	series *<-chan *SerData
+	series map[string]*SeriesRecord
+}
+
+type SeriesRecord struct {
+	data *<-chan *SerData
 	stop   *chan<- int
 }
 
@@ -65,6 +69,13 @@ type SeriesOpts struct {
 	Values []ValueId
 	Period time.Duration
 	Count  int
+}
+
+type APISeriesRecord struct {
+	UUID    string
+	Stop    bool
+	Len     uint
+	//Created time.Time
 }
 
 type MonitorOpts struct {
@@ -186,41 +197,112 @@ func (lab *Lab) ListSensors(rescan *bool, sensors *APISensors) error {
 	return nil
 }
 
-func (lab *Lab) StartSeries(opts *SeriesOpts, ok *bool) error {
-	if lab.stop != nil {
-		*lab.stop <- 1
-		lab.stop = nil
+func (lab *Lab) StartSeries(opts *SeriesOpts, u *string) error {
+
+	// Check pool size
+	if len(lab.series) > int(config.Series.Pool) {
+		// search stopped/old series and delete
+		deleted := false;
+		for k, s := range lab.series {
+			if s.stop == nil {
+				delete(lab.series, k)
+				deleted = true
+				break
+			}
+		}
+
+		if !deleted {
+			// TODO: try stop older series, need creation time
+			/*
+			old := ""
+			if lab.series[old].stop != nil {
+				*lab.series[old].stop <- 1
+				lab.series[old].stop = nil
+			}
+			*/
+
+			*u = ""
+			return errors.New("series is busy")
+		}
 	}
+
 	data, stop, err := startSeries(opts.Values, opts.Period, opts.Count)
 	if err != nil {
-		*ok = false
+		*u = ""
 		return err
 	}
-	lab.series = &data
-	lab.stop = &stop
-	*ok = true
-	return nil
-}
 
-func (lab *Lab) StopSeries(ptr uintptr, ok *bool) error {
-	if lab.stop == nil {
-		*ok = false
-		return errors.New("no series running")
+	*u = uuid.NewRandom().String()
+	lab.series[*u] = &SeriesRecord{
+		data: &data,
+		stop: &stop,
 	}
-	*lab.stop <- 1
-	lab.stop = nil
+
+	return nil
+}
+
+func (lab *Lab) StopSeries(u *string, ok *bool) error {
+	if *u == "" {
+		*ok = false
+		return errors.New("wrong series uuid")
+	}
+
+	s, exists := lab.series[*u]
+	if !exists {
+		*ok = false
+		return errors.New("series is not running")
+	}
+
+	if s.stop == nil {
+		*ok = false
+		return errors.New("series is not running")
+	}
+
+	*s.stop <- 1
+	s.stop = nil
+
 	*ok = true
 	return nil
 }
 
-func (lab *Lab) GetSeries(ptr uintptr, data *[]*SerData) error {
-	if lab.series == nil {
+func (lab *Lab) GetSeries(u *string, data *[]*SerData) error {
+	if *u == "" {
+		return errors.New("wrong series uuid")
+	}
+
+	s, exists := lab.series[*u]
+	if !exists {
+		return errors.New("series is not running")
+	}
+
+	if s.data == nil {
 		return errors.New("no series ever run")
 	}
-	*data = make([]*SerData, len(*lab.series))
+	*data = make([]*SerData, len(*s.data))
 	for i := range *data {
-		(*data)[i] = <-*lab.series
+		(*data)[i] = <-*s.data
 	}
+	return nil
+}
+
+func (lab *Lab) ListSeries(ptr uintptr, result *[]APISeriesRecord) error {
+	*result = make([]APISeriesRecord, 0)
+
+	for k, s := range lab.series {
+		st := false
+		if s.stop == nil {
+			st = true
+		}
+		sr := APISeriesRecord{
+			k,
+			st,
+			uint(len(*s.data)),
+			//s.Created,
+		}
+
+		*result = append(*result, sr)
+	}
+
 	return nil
 }
 
@@ -738,7 +820,8 @@ func listenTCP(addr string) (listener *net.TCPListener, err error) {
 }
 
 func startAPI() (listeners []net.Listener, err error) {
-	lab := new(Lab)
+	lab := &Lab{series: make(map[string]*SeriesRecord)}
+
 	rpc.Register(lab)
 	listeners = make([]net.Listener, 0, 2)
 	if config.Socket.Enable {

@@ -53,6 +53,7 @@ type I2CConf struct {
 
 type SeriesConf struct {
 	Buffer uint
+	Pool   uint
 }
 
 type MonitorConf struct {
@@ -246,6 +247,9 @@ func loadConfig(path string) (err error) {
 	}
 	if config.Series.Buffer == 0 {
 		config.Series.Buffer = 100
+	}
+	if config.Series.Pool == 0 {
+		config.Series.Pool = 50
 	}
 	if config.Monitor.Path == "" {
 		config.Monitor.Path = "/var/lib/sdlab/monitor"

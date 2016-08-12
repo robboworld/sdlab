@@ -61,7 +61,7 @@ func main() {
 
 	// Database prepare
 
-	db, err := initDB(config.Database)
+	db, err = initDB(config.Database)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -77,6 +77,7 @@ func main() {
 	if err != nil {
 		logger.Fatal(err)
 	}
+	logger.Print("Database connected")
 
 	// Run monitors
 

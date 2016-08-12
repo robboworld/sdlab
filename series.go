@@ -38,11 +38,11 @@ func startSeries(values []ValueId, period time.Duration, count int) (<-chan *Ser
 	// check that values are available and period does not exceed resolution
 	for _, v := range values {
 		if pluggedSensors[v.Sensor] == nil {
-			err := errors.New("no sensor `" + v.Sensor + "' connected")
+			err := errors.New("no sensor '" + v.Sensor + "' connected")
 			return nil, nil, err
 		}
 		if len(pluggedSensors[v.Sensor].Values) <= v.ValueIdx {
-			err := fmt.Errorf("no value %d for sensor `%s' available",
+			err := fmt.Errorf("no value %d for sensor '%s' available",
 				v.ValueIdx, v.Sensor)
 			return nil, nil, err
 		}
