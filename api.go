@@ -39,8 +39,9 @@ type Lab struct {
 }
 
 type SeriesRecord struct {
-	data *<-chan *SerData
-	stop   *chan<- int
+	data     *<-chan *SerData
+	stop       *chan<- int
+	finished *<-chan int
 }
 
 type ValueId struct {
@@ -72,9 +73,10 @@ type SeriesOpts struct {
 }
 
 type APISeriesRecord struct {
-	UUID    string
-	Stop    bool
-	Len     uint
+	UUID     string
+	Stop     bool
+	Finished bool
+	Len      uint
 	//Created time.Time
 }
 
@@ -198,35 +200,21 @@ func (lab *Lab) ListSensors(rescan *bool, sensors *APISensors) error {
 }
 
 func (lab *Lab) StartSeries(opts *SeriesOpts, u *string) error {
-
-	// Check pool size
-	if len(lab.series) > int(config.Series.Pool) {
-		// search stopped/old series and delete
-		deleted := false;
-		for k, s := range lab.series {
-			if s.stop == nil {
-				delete(lab.series, k)
-				deleted = true
-				break
-			}
-		}
-
-		if !deleted {
-			// TODO: try stop older series, need creation time
-			/*
-			old := ""
-			if lab.series[old].stop != nil {
-				*lab.series[old].stop <- 1
-				lab.series[old].stop = nil
-			}
-			*/
-
+	// Check pool size and cleanup?
+	if len(lab.series) >= int(config.Series.Pool) {
+		/*
+		// XXX: skip cleanup now because unknown rule of series deletion (when and which of them)? just return busy
+		err := lab.cleanupSeries()
+		if err != nil {
 			*u = ""
-			return errors.New("series is busy")
+			return err
 		}
+		*/
+		*u = ""
+		return errors.New("series is busy")
 	}
 
-	data, stop, err := startSeries(opts.Values, opts.Period, opts.Count)
+	data, stop, finished, err := startSeries(opts.Values, opts.Period, opts.Count)
 	if err != nil {
 		*u = ""
 		return err
@@ -234,8 +222,9 @@ func (lab *Lab) StartSeries(opts *SeriesOpts, u *string) error {
 
 	*u = uuid.NewRandom().String()
 	lab.series[*u] = &SeriesRecord{
-		data: &data,
-		stop: &stop,
+		data:     &data,
+		stop:     &stop,
+		finished: &finished,
 	}
 
 	return nil
@@ -289,18 +278,106 @@ func (lab *Lab) ListSeries(ptr uintptr, result *[]APISeriesRecord) error {
 	*result = make([]APISeriesRecord, 0)
 
 	for k, s := range lab.series {
-		st := false
+		st, finished := false, false
 		if s.stop == nil {
 			st = true
+		}
+		if len(*s.finished) > 0 {
+			finished = true
 		}
 		sr := APISeriesRecord{
 			k,
 			st,
+			finished,
 			uint(len(*s.data)),
 			//s.Created,
 		}
 
 		*result = append(*result, sr)
+	}
+
+	return nil
+}
+
+func (lab *Lab) RemoveSeries(u *string, ok *bool) error {
+	if *u == "" {
+		*ok = false
+		return errors.New("wrong series uuid")
+	}
+
+	s, exists := lab.series[*u]
+	if !exists {
+		*ok = false
+		return errors.New("series is not exists")
+	}
+
+	// stop if not stopped
+	if s.stop != nil {
+		*s.stop <- 1
+		s.stop = nil
+	}
+
+	delete(lab.series, *u)
+	//logger.Print("series " + *u + " removed")
+
+	*ok = true
+	return nil
+}
+
+func (lab *Lab) CleanSeries(ptr uintptr, ok *bool) error {
+	// Warning! Will be removed ALL series!
+	for k, s := range lab.series {
+		// stop if not stopped
+		if s.stop != nil {
+			*s.stop <- 1
+			s.stop = nil
+		}
+
+		delete(lab.series, k)
+	}
+
+	//logger.Print("series removed")
+
+	*ok = true
+	return nil
+}
+
+func (lab *Lab) cleanupSeries() error {
+	// search stopped/old series and delete one
+	deleted := false
+	
+	for k, s := range lab.series {
+		found := false
+		if s.stop == nil {
+			// if channel not initialized, removed or nil`ed
+			found = true
+		} else if len(*s.stop) > 0 {
+			// already stopped
+			found = true
+		} else if len(*s.finished) > 0 {
+			// already finished himself
+			found = true
+		}
+
+		// Delete from list
+		if found {
+			delete(lab.series, k)
+			deleted = true
+			logger.Print("series " + k + " purged")
+			break
+		}
+	}
+
+	if !deleted {
+		// TODO: try stop older series, need creation time
+
+		//old := ""
+		//if lab.series[old].stop != nil {
+		//	*lab.series[old].stop <- 1
+		//	lab.series[old].stop = nil
+		//}
+
+		return errors.New("series is busy")
 	}
 
 	return nil
