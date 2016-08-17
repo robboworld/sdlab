@@ -31,7 +31,9 @@ import (
 
 const (
 	RFC3339_UTC      = "2006-01-02T15:04:05Z"
-	RFC3339NANO3_UTC = "2006-01-02T15:04:05.999Z"
+	RFC3339Nano_UTC  = "2006-01-02T15:04:05.999999999Z"
+	RFC3339Milli     = "2006-01-02T15:04:05.999Z07:00"
+	RFC3339Milli_UTC = "2006-01-02T15:04:05.999Z"
 )
 
 type MonValue struct {
@@ -261,25 +263,25 @@ func initQueries(dbtype string) error {
 		SELECT time, sensor_id, sensor_val_id, detection, error
 		FROM detections
 		WHERE (mon_id = ?)
-		ORDER BY strftime('%s', time), strftime('%f', time), sensor_id, sensor_val_id;
+		ORDER BY strftime("%Y-%m-%d %H:%M:%f", time), sensor_id, sensor_val_id;
 	`
 	queries["detections_select_by_monitor_time_from"] = `
 		SELECT time, sensor_id, sensor_val_id, detection, error
 		FROM detections
-		WHERE (mon_id = ?) AND (time >= ?)
-		ORDER BY strftime('%s', time), strftime('%f', time), sensor_id, sensor_val_id;
+		WHERE (mon_id = ?) AND (strftime("%Y-%m-%d %H:%M:%f", time) >= strftime("%Y-%m-%d %H:%M:%f", ?))
+		ORDER BY strftime("%Y-%m-%d %H:%M:%f", time), sensor_id, sensor_val_id;
 	`
 	queries["detections_select_by_monitor_time_to"] = `
 		SELECT time, sensor_id, sensor_val_id, detection, error
 		FROM detections
-		WHERE (mon_id = ?) AND (time <= ?)
-		ORDER BY strftime('%s', time), strftime('%f', time), sensor_id, sensor_val_id;
+		WHERE (mon_id = ?) AND (strftime("%Y-%m-%d %H:%M:%f", time) <= strftime("%Y-%m-%d %H:%M:%f", ?))
+		ORDER BY strftime("%Y-%m-%d %H:%M:%f", time), sensor_id, sensor_val_id;
 	`
 	queries["detections_select_by_monitor_time_range"] = `
 		SELECT time, sensor_id, sensor_val_id, detection, error
 		FROM detections
-		WHERE (mon_id = ?) AND (time BETWEEN ? AND ?)
-		ORDER BY strftime('%s', time), strftime('%f', time), sensor_id, sensor_val_id;
+		WHERE (mon_id = ?) AND (strftime("%Y-%m-%d %H:%M:%f", time) BETWEEN strftime("%Y-%m-%d %H:%M:%f", ?) AND strftime("%Y-%m-%d %H:%M:%f", ?))
+		ORDER BY strftime("%Y-%m-%d %H:%M:%f", time), sensor_id, sensor_val_id;
 	`
 	queries["detections_count_by_monitor"] = `
 		SELECT COUNT(*)
@@ -304,7 +306,7 @@ func initQueries(dbtype string) error {
 		SELECT time
 		FROM detections
 		WHERE mon_id = ?
-		ORDER BY strftime('%s', time) DESC, strftime('%f', time) DESC
+		ORDER BY strftime("%Y-%m-%d %H:%M:%f", time) DESC
 		LIMIT 1;
 	`
 	queries["detections_insert"] = `
@@ -365,8 +367,8 @@ func monitorToDB(mon *Monitor) (monDBi *MonitorDBItem, err error) {
 		mon.Setup_id,
 		mon.Step,
 		mon.Remind,
-		mon.Created.Format(time.RFC3339Nano),
-		mon.StopAt.Format(time.RFC3339Nano),
+		mon.Created.UTC().Format(time.RFC3339Nano),
+		mon.StopAt.UTC().Format(time.RFC3339Nano),
 		mon.Active,
 
 		mon.Values,
@@ -623,7 +625,7 @@ func loadRunMonitors() error {
 	}
 
 	uuids_list := strings.Join(uuids, ", ")
-	//fmt.Printf(LPURPLE+"loadRunMonitors#%-23s:"+NCO+" Count Monitors %d Rows %s\n", time.Now().Format(RFC3339NANO3_UTC), count, uuids_list)
+	//fmt.Printf(LPURPLE+"loadRunMonitors#%-23s:"+NCO+" Count Monitors %d Rows %s\n", time.Now().UTC().Format(time.RFC3339Nano), count, uuids_list)
 	logger.Printf("Found %d monitors: [%s]\n", count, uuids_list)
 
 	return nil
@@ -729,7 +731,7 @@ func (mon *Monitor) Update(vals ...interface{}) error {
 		Id:             0,
 		Exp_id:         mon.Exp_id,
 		Mon_id:         mon.Id,
-		Time:           tm.Format(RFC3339NANO3_UTC),
+		Time:           tm.UTC().Format(time.RFC3339Nano),
 		Sensor_id:      "",
 		Sensor_val_id:  0,
 		Detection:      0,
@@ -1101,18 +1103,18 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResul
 	} else if start.IsZero() {
 		rows, err = tx.Stmt(stmts["detections_select_by_monitor_time_to"]).Query(
 			mon.Id,
-			end.Format(time.RFC3339Nano),
+			end.UTC().Format(time.RFC3339Nano),
 		)
 	} else if end.IsZero() {
 		rows, err = tx.Stmt(stmts["detections_select_by_monitor_time_from"]).Query(
 			mon.Id,
-			start.Format(time.RFC3339Nano),
+			start.UTC().Format(time.RFC3339Nano),
 		)
 	} else {
 		rows, err = tx.Stmt(stmts["detections_select_by_monitor_time_range"]).Query(
 			mon.Id,
-			start.Format(time.RFC3339Nano),
-			end.Format(time.RFC3339Nano),
+			start.UTC().Format(time.RFC3339Nano),
+			end.UTC().Format(time.RFC3339Nano),
 		)
 	}
 

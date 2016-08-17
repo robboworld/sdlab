@@ -260,7 +260,22 @@ func loadConfig(path string) (err error) {
 	if config.Database.Dsn == "" {
 		switch config.Database.Type {
 		case "sqlite":
-			// Format: dbname[?param1=value1&...&paramN=valueN]
+			// Format: [file:]dbname[?param1=value1&...&paramN=valueN]
+			// @see https://www.sqlite.org/c3ref/open.html 
+			// Query parameters:
+			//   vfs:       Name of a VFS object.
+			//   mode:      The mode parameter may be set to either "ro", "rw", "rwc", or "memory".
+			//   cache:     The cache parameter may be set to either "shared" or "private".
+			//   psow:      The psow parameter indicates whether or not the powersafe overwrite property does or 
+			//              does not apply to the storage media on which the database file resides.
+			//   nolock:    The nolock parameter is a boolean query parameter which if set disables file locking in rollback journal modes.
+			//              This is useful for accessing a database on a filesystem that does not support locking.
+			//              Caution: Database corruption might result if two or more processes write to the same database and any one of those processes uses nolock=1.
+			//   immutable: The immutable parameter is a boolean query parameter that indicates that the database file is stored on read-only media.
+			//              When immutable is set, SQLite assumes that the database file cannot be changed, even by a process with higher privilege,
+			//              and so the database is opened read-only and all locking and change detection is disabled.
+			//              Caution: Setting the immutable property on a database file that does in fact change can result 
+			//              in incorrect query results and/or SQLITE_CORRUPT errors. See also: SQLITE_IOCAP_IMMUTABLE.
 			config.Database.Dsn = "/data/sdlab.db"
 
 		case "mysql":
