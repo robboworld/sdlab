@@ -104,8 +104,8 @@ type APIMonitor struct {
 
 type MonFetchOpts struct {
 	UUID  string
-	Start time.Time
-	End   time.Time
+	Start time.Time  `json:",omitempty"`
+	End   time.Time  `json:",omitempty"`
 	Step  time.Duration
 }
 
@@ -336,7 +336,7 @@ func (lab *Lab) CleanSeries(ptr uintptr, ok *bool) error {
 		delete(lab.series, k)
 	}
 
-	//logger.Print("series removed")
+	logger.Print("series removed")
 
 	*ok = true
 	return nil
@@ -388,12 +388,13 @@ func (lab *Lab) StartMonitor(opts *MonitorOpts, uuid *string) error {
 	if err != nil {
 		return err
 	}
+	logger.Printf("StartMonitor: started %s", mon.UUID.String())
 	*uuid = mon.UUID.String()
 	return nil
 }
 
 func (lab *Lab) StopMonitor(u *string, ok *bool) error {
-	mon, exist := monitors[string(uuid.Parse(*u))]
+	mon, exist := monitors[uuid.Parse(*u).String()]
 	if !exist {
 		*ok = false
 		return errors.New("Wrong monitor UUID: " + *u)
@@ -435,7 +436,7 @@ func (lab *Lab) ListMonitors(ptr uintptr, result *[]APIMonitor) error {
 }
 
 func (lab *Lab) GetMonInfo(u *string, info *MonitorInfo) error {
-	mon, exist := monitors[string(uuid.Parse(*u))]
+	mon, exist := monitors[uuid.Parse(*u).String()]
 	if !exist {
 		return errors.New("Wrong monitor UUID: " + *u)
 	}
@@ -452,7 +453,7 @@ func (lab *Lab) GetMonInfo(u *string, info *MonitorInfo) error {
 
 func (lab *Lab) RemoveMonitor(opts *MonRemoveOpts, ok *bool) error {
 	*ok = true
-	mon, exist := monitors[string(uuid.Parse(opts.UUID))]
+	mon, exist := monitors[uuid.Parse(opts.UUID).String()]
 	if !exist {
 		*ok = false
 		return errors.New("Wrong monitor UUID: " + opts.UUID)
@@ -465,7 +466,7 @@ func (lab *Lab) RemoveMonitor(opts *MonRemoveOpts, ok *bool) error {
 }
 
 func (lab *Lab) GetMonData(opts *MonFetchOpts, data *[]*SerData) error {
-	mon, exist := monitors[string(uuid.Parse(opts.UUID))]
+	mon, exist := monitors[uuid.Parse(opts.UUID).String()]
 	if !exist {
 		return errors.New("Wrong monitor UUID: " + opts.UUID)
 	}
