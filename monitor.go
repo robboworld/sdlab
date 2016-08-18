@@ -189,7 +189,7 @@ func initQueries(dbtype string) error {
 			journal_mode       - (WAL journaling mode uses a write-ahead log instead of a rollback journal 
 								 to implement transactions)
 			journal_size_limit - limit the size of rollback-journal and WAL files left in the file-system 
-								 after transactions or checkpoints 
+								 after transactions or checkpoints, (in MiB)
 								 (the write-ahead log file is not truncated following a checkpoint)
 			locking_mode       - the database connection locking-mode.
 								 The locking-mode is either NORMAL or EXCLUSIVE (default NORMAL).
@@ -470,11 +470,11 @@ func loadMonitor(monid int) (*Monitor, error) {
 	rows, err := tx.Stmt(stmts["monitors_values_select_by_uuid"]).Query(mondbi.UUID)
 	if err != nil {
 		//fmt.Printf(LPURPLE+"loadMonitor#%05d:"+RED+" Fatal Monitor UUID %s Values Stmt Query %s, continue\n"+NCO, monid, mondbi.UUID, err)
-		logger.Print("Fatal Monitor UUID %s Values Stmt Query: ", mondbi.UUID, err.Error())
+		logger.Printf("Fatal Monitor UUID %s Values Stmt Query: %s\n", mondbi.UUID, err.Error())
 		err2 = tx.Rollback()
 		if err2 != nil {
 			//fmt.Printf(LPURPLE+"loadMonitor#%05d:"+RED+" Fatal Monitor UUID %s Values Stmt Rollback %s, continue\n"+NCO, monid, mondbi.UUID, err2)
-			logger.Print("Fatal Monitor UUID %s Values Stmt Rollback: ", mondbi.UUID, err2.Error())
+			logger.Printf("Fatal Monitor UUID %s Values Stmt Rollback: %s\n", mondbi.UUID, err2.Error())
 			return nil, err2
 		}
 		return nil, err2
@@ -793,7 +793,7 @@ func (mon *Monitor) Update(vals ...interface{}) error {
 
 	err = tx.Commit()
 	if err != nil {
-		//fmt.Printf(LBLUE+"Update:"+RED+" Fatal Commit Update Detections for %s\n"+NCO, mon.UUID.String(), err)
+		//fmt.Printf(LBLUE+"Update:"+RED+" Fatal Commit Update Detections for %s: %s\n"+NCO, mon.UUID.String(), err.Error())
 		//logger.Printf("Update: Fatal Commit Update Detections for %s: %s", mon.UUID.String(), err.Error())
 		return err
 	}
@@ -1236,6 +1236,134 @@ func (mon *Monitor) Remove(wdata bool) error {
 		err = fmt.Errorf("error removing monitor: %d : %s", mon.Id, mon.UUID.String())
 	}
 	return err
+}
+
+func runStrobe(mdb *MonitorDBItem, check bool) error {
+	// Use monitor data (also sensors) to make one detections strobe
+
+	if check {
+		// Check values
+		if len(mdb.Values) == 0 {
+			return errors.New("no sensors selected")
+		}
+		// Check that values are available
+		for _, v := range mdb.Values {
+			if pluggedSensors[v.Sensor] == nil {
+				return errors.New("no sensor '" + v.Sensor + "' connected")
+			}
+			if len(pluggedSensors[v.Sensor].Values) <= v.ValueIdx {
+				return fmt.Errorf("no value %d for sensor '%s' available", v.ValueIdx, v.Sensor)
+			}
+		}
+	}
+
+	readings := make([](chan float64), len(mdb.Values))
+	for i := range readings {
+		readings[i] = make(chan float64, 1)
+	}
+	vals := make([]interface{}, len(mdb.Values)+1)
+	go func() {
+		for i, v := range mdb.Values {
+			go getSerData(v.Sensor, v.ValueIdx, readings[i])
+		}
+		vals[0] = time.Now()
+		for i, c := range readings {
+			vals[i+1] = <-c
+		}
+		updateStrob(mdb, vals...)
+	}()
+	return nil
+}
+
+func updateStrob(mdb *MonitorDBItem, vals ...interface{}) error {
+	var err,err2 error
+
+	if len(vals) < 2 {
+		//return fmt.Errorf("Update Strobe Error: no new detections for %s", mdb.UUID)
+		return nil
+	}
+
+	var nulltime time.Time
+	tm, ok := vals[0].(time.Time)
+	if !ok {
+		tm = nulltime
+	}
+
+	det := DetectionDBItem{
+		Id:             0,
+		Exp_id:         mdb.Exp_id,
+		Mon_id:         mdb.Id,
+		Time:           tm.UTC().Format(time.RFC3339Nano),
+		Sensor_id:      "",
+		Sensor_val_id:  0,
+		Detection:      0,
+		Error:          "",  // TODO: remode old error field
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	sqlInsert := queries["_detections_insert_into"] + " VALUES "
+	values := []interface{}{}
+	for i, v := range vals {
+		if i == 0 {
+			// Skip time
+			continue
+		}
+
+		sqlInsert += queries["_detections_insert_values"] + ","
+
+		values = append(values,
+			det.Exp_id,
+			det.Mon_id,
+			det.Time,
+			mdb.Values[i-1].Sensor,
+			mdb.Values[i-1].ValueIdx,
+			v,
+			"",
+		)
+	}
+	sqlInsert = strings.TrimSuffix(sqlInsert, ",")
+	logger.Printf("Update Strobe: Debug sqlInsert: %s", sqlInsert)
+	logger.Printf("Update Strobe: Debug sqlInsert vals: %+v", values)
+	// Prepare the statement
+	stmt, err := tx.Prepare(sqlInsert)
+	if err != nil {
+		err2 = tx.Rollback()
+		if err2 != nil {
+			return err2
+		}
+
+		return err
+	}
+
+	// Execute
+	//res, err := stmt.Exec(values...)
+	_, err = stmt.Exec(values...)
+	if err != nil {
+		err2 = tx.Rollback()
+		if err2 != nil {
+			return err2
+		}
+
+		return err
+	}
+
+	//logger.Printf("Update Strobe: Inserted for Monitor %s Count Detections %d", mdb.Id, res.RowsAffected())
+
+	err = tx.Commit()
+	if err != nil {
+		//fmt.Printf(LBLUE+"Update Strobe:"+RED+" Fatal Commit Update Detections for %s: %s\n"+NCO, mdb.UUID, err)
+		//logger.Printf("Update Strobe: Fatal Commit Update Detections for %s: %s", mdb.UUID, err.Error())
+		return err
+	}
+
+	//fmt.Printf(LBLUE+"Update Strobe %-23s:"+NCO+" insert detections\n", time.Now().Format("2006-01-02T15:04:05.999"))
+	//logger.Printf("Update Strobe %-23s: insert detections for %s", time.Now().Format("2006-01-02T15:04:05.999"), mdb.UUID)
+
+	return nil
 }
 
 func newMonitor(opts *MonitorOpts) (*Monitor, error) {

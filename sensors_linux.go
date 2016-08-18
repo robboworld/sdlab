@@ -350,7 +350,7 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 	return data, nil
 }
 
-func scanSensors() (err error) {
+func scanSensors() error {
 	logger.Print("Searching for sensors...")
 	pluggedSensors = make(PluggedSensors)
 	for i := range sensors {

@@ -86,11 +86,11 @@ type ValueYAML struct {
 	Name       string
 	Range      DataRange
 	Resolution int
-	File       string ",omitempty"
-	Command    string ",omitempty"
+	File       string `yaml:",omitempty"`
+	Command    string `yaml:",omitempty"`
 	Re         string
 	Multiplier float64
-	Addend     float64 ",omitempty"
+	Addend     float64 `yaml:",omitempty"`
 	Type       ValueType
 }
 

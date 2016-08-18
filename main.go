@@ -44,7 +44,7 @@ func main() {
 	err = loadConfig(configPath)
 	if err != nil {
 		// logger still is nil
-		log.Fatal("Error loading configuration: %s", err)
+		log.Fatalf("Error loading configuration: %s", err)
 	}
 	logger, err = openLog()
 	if err != nil {

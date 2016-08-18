@@ -114,6 +114,12 @@ type MonRemoveOpts struct {
 	WithData bool
 }
 
+type MonStrobeOpts struct {
+	UUID       string
+	Opts       *MonitorOpts  `json:",omitempty"`  // can omit if use UUID, else error
+	OptsStrict *bool         `json:",omitempty"`  // can omit if use UUID, else false by default
+}
+
 type TimeSetOpts struct {
 	TZ       string
 	Datetime time.Time
@@ -465,6 +471,56 @@ func (lab *Lab) RemoveMonitor(opts *MonRemoveOpts, ok *bool) error {
 	return err
 }
 
+func (lab *Lab) StrobeMonitor(opts *MonStrobeOpts, ok *bool) error {
+	var monDBi *MonitorDBItem
+	var err error
+	strict := false
+
+	*ok = true
+	if opts.UUID != "" {
+		// Monitor sensors values
+		mon, exist := monitors[uuid.Parse(opts.UUID).String()]
+		if !exist {
+			*ok = false
+			return errors.New("Wrong monitor UUID: " + opts.UUID)
+		}
+
+		monDBi, err = monitorToDB(mon)
+		if err != nil {
+			*ok = false
+			return err
+		}
+	} else {
+		// Custom sensors values (not use real Monitor)
+		if opts.Opts == nil {
+			*ok = false
+			return errors.New("Empty strob parameters")
+		}
+		if opts.OptsStrict != nil {
+			strict = *(opts.OptsStrict)
+		}
+
+		monDBi = &MonitorDBItem{
+			Exp_id: opts.Opts.Exp_id,
+			Values: make([]MonValue, len(opts.Opts.Values)),
+		}
+		// Convert Values type
+		for i := range opts.Opts.Values {
+			monDBi.Values[i] = MonValue{
+				Sensor:   opts.Opts.Values[i].Sensor,
+				ValueIdx: opts.Opts.Values[i].ValueIdx,
+			}
+		}
+	}
+
+	err = runStrobe(monDBi, strict)
+	if err != nil {
+		*ok = false
+	}
+
+	return err
+}
+
 func (lab *Lab) GetMonData(opts *MonFetchOpts, data *[]*SerData) error {
 	mon, exist := monitors[uuid.Parse(opts.UUID).String()]
 	if !exist {
@@ -543,7 +599,7 @@ func (lab *Lab) SetDatetime(opts *TimeSetOpts, ok *bool) error {
 		*/
 
 		// Use batch script to set TZ and reconfigure
-		_, err := exec.Command("changetz.sh", opts.TZ).Output()
+		_, err = exec.Command("changetz.sh", opts.TZ).Output()
 		if err != nil {
 			*ok = false
 			return errors.New("Set timezone failed: " + err.Error())
@@ -555,12 +611,12 @@ func (lab *Lab) SetDatetime(opts *TimeSetOpts, ok *bool) error {
 	if opts.Reboot {
 		/*
 		// XXX: not works (blocks thread)
-		//_, err := exec.Command("/sbin/shutdown", "-r", "-t ", "5", "now").Output()
+		//_, err = exec.Command("/sbin/shutdown", "-r", "-t ", "5", "now").Output()
 		*/
 		// Use nonblocking method - script with call shutdown scheduled as:
 		//   echo "shutdown -r now" | at now + 1 minute
 		// minimum delay is 1 min :(
-		_, err := exec.Command("sdlabreboot.sh").Output()
+		_, err = exec.Command("sdlabreboot.sh").Output()
 		if err != nil {
 			*ok = false
 			return errors.New("Update timezone error, cannot reboot: " + err.Error())
@@ -600,7 +656,7 @@ func (lab *Lab) ListVideos(ptr uintptr, data *[]*CamData) error {
 		if lattr > 0 {
 			cd.Device = attr[0]
 			var idx uint
-			_, err := fmt.Sscanf(cd.Device, "/dev/video%d", &idx)
+			_, err = fmt.Sscanf(cd.Device, "/dev/video%d", &idx)
 			if err != nil {
 				continue
 			}
@@ -658,7 +714,7 @@ func (lab *Lab) GetVideoStream(device *string, info *CamStreamData) error {
 			csd.Device = dname
 
 			// Get device index
-			_, err := fmt.Sscanf(csd.Device, "/dev/video%d", &idx)
+			_, err = fmt.Sscanf(csd.Device, "/dev/video%d", &idx)
 			if err != nil {
 				continue
 			}
@@ -675,7 +731,7 @@ func (lab *Lab) GetVideoStream(device *string, info *CamStreamData) error {
 					continue
 				} else {
 					// If exists port number after prefix (parse last args string part)
-					_, err := fmt.Sscanf(strings.Join(args[i:], " "), "%d", &idx)
+					_, err = fmt.Sscanf(strings.Join(args[i:], " "), "%d", &idx)
 					if err != nil {
 						// Not set port number
 						break
@@ -869,7 +925,7 @@ func (lab *Lab) StopVideoStreamAll(ptr uintptr, ok *bool) error {
 }
 
 func listenUnix(path string, uid, gid int, mode os.FileMode) (listener *net.UnixListener, err error) {
-	socketAddr := net.UnixAddr{path, "unix"}
+	socketAddr := net.UnixAddr{Name:path, Net:"unix"}
 	listener, err = net.ListenUnix(socketAddr.Network(), &socketAddr)
 	if err != nil {
 		return nil, err
@@ -926,16 +982,16 @@ func startAPI() (listeners []net.Listener, err error) {
 		}
 	}
 	for i := range listeners {
-		go func() {
+		go func(iListener int) {
 			for {
-				conn, err := listeners[i].Accept()
+				conn, err := listeners[iListener].Accept()
 				if err != nil {
 					logger.Print(err)
 					continue
 				}
 				go jsonrpc.ServeConn(conn)
 			}
-		}()
+		}(i)
 	}
 	return listeners, nil
 }

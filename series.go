@@ -115,6 +115,10 @@ func getSerData(s string, id int, c chan float64) {
 		c <- math.NaN()
 		return
 	}
+	if len(sr.Values) <= id {
+		c <- math.NaN()
+		return
+	}
 	d, err := sr.GetData(id)
 	if err != nil {
 		logger.Print(err)
