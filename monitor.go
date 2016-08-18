@@ -172,15 +172,10 @@ func initQueries(dbtype string) error {
 			PRAGMA wal_autocheckpoint = 16384;
 		`
 		/*
-		queries["_pre"] = `
-			PRAGMA busy_timeout = 50000000;
-		`*/
-
-		/*
 		Sqlite Database PRAGMAs
 		@see http://www.sqlite.org/pragma.html
 			automatic_index    - ? (default enabled)
-			busy_timeout       - sleeps for a specified amount of time when a table is locked (default 0)
+			busy_timeout       - sleeps for a specified amount of time when a table is locked (milliseconds, default 0)
 			cache_size         - maximum number of database disk pages that SQLite will hold in memory at once 
 								 per open database file. default "-2000" (cache size is limited to 2048000 bytes)
 			cache_spill        - enables or disables the ability of the pager to spill dirty cache pages to 
