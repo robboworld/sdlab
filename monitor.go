@@ -51,7 +51,7 @@ type Monitor struct {
 	Exp_id   int
 	Setup_id int
 	Step     uint         // Interval
-	Remind   uint         // Amount decremented
+	Amount   uint         // Amount total, 0 if StopAt mode
 	Created  time.Time
 	StopAt   time.Time
 	Active   bool
@@ -66,8 +66,8 @@ type MonitorDBItem struct {
 	UUID     string
 	Exp_id   int
 	Setup_id int
-	Step     uint         // Interval
-	Remind   uint         // Amount decremented
+	Step     uint
+	Amount   uint
 	Created  string
 	StopAt   string
 	Active   bool
@@ -228,11 +228,11 @@ func initQueries(dbtype string) error {
 		FROM monitors;
 	`
 	queries["monitors_insert"] = `
-		INSERT INTO monitors (uuid, exp_id, setup_id, interval, remind, created, stopat, active)
+		INSERT INTO monitors (uuid, exp_id, setup_id, interval, amount, created, stopat, active)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 	`
 	queries["monitors_replace"] = `
-		INSERT OR REPLACE INTO monitors (id, uuid, exp_id, setup_id, interval, remind, created, stopat, active)
+		INSERT OR REPLACE INTO monitors (id, uuid, exp_id, setup_id, interval, amount, created, stopat, active)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`
 	queries["monitors_delete_by_id"] = `
@@ -361,7 +361,7 @@ func monitorToDB(mon *Monitor) (monDBi *MonitorDBItem, err error) {
 		mon.Exp_id,
 		mon.Setup_id,
 		mon.Step,
-		mon.Remind,
+		mon.Amount,
 		mon.Created.UTC().Format(time.RFC3339Nano),
 		mon.StopAt.UTC().Format(time.RFC3339Nano),
 		mon.Active,
@@ -394,9 +394,9 @@ func monitorFromDB(mondbi *MonitorDBItem) (mon *Monitor, err error) {
 	if len(string(mondbi.Step)) > 0 {
 		step, _ = strconv.Atoi(mondbi.Step)
 	}
-	remind := 0
-	if len(string(mondbi.Remind)) > 0 {
-		remind, _ = strconv.Atoi(mondbi.Remind)
+	amount := 0
+	if len(string(mondbi.Amount)) > 0 {
+		amount, _ = strconv.Atoi(mondbi.Amount)
 	}
 	for i, v := range mondbi.Values {
 		mondbi.Values[i] = mondbi.Values[i]
@@ -408,7 +408,7 @@ func monitorFromDB(mondbi *MonitorDBItem) (mon *Monitor, err error) {
 		mondbi.Exp_id,
 		mondbi.Setup_id,
 		mondbi.Step,
-		mondbi.Remind,
+		mondbi.Amount,
 		created,
 		stopAt,
 		mondbi.Active,
@@ -439,7 +439,7 @@ func loadMonitor(monid int) (*Monitor, error) {
 		&mondbi.Exp_id,
 		&mondbi.Setup_id,
 		&mondbi.Step,
-		&mondbi.Remind,
+		&mondbi.Amount,
 		&mondbi.Created,
 		&mondbi.StopAt,
 		&mondbi.Active,
@@ -836,7 +836,7 @@ func (mon *Monitor) Save() error {
 			monDBi.Exp_id,
 			monDBi.Setup_id,
 			monDBi.Step,
-			monDBi.Remind,
+			monDBi.Amount,
 			monDBi.Created,
 			monDBi.StopAt,
 			monDBi.Active,
@@ -856,7 +856,7 @@ func (mon *Monitor) Save() error {
 			monDBi.Exp_id,
 			monDBi.Setup_id,
 			monDBi.Step,
-			monDBi.Remind,
+			monDBi.Amount,
 			monDBi.Created,
 			monDBi.StopAt,
 			monDBi.Active,
