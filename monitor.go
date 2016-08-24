@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"time"
 	"strings"
+	"math"
 )
 
 const (
@@ -748,14 +749,29 @@ func (mon *Monitor) Update(vals ...interface{}) error {
 
 		sqlInsert += queries["_detections_insert_values"] + ","
 
+		det_error := sql.NullString{String:"", Valid:false}
+		det_value := sql.NullFloat64{Float64:0, Valid:false}
+		var found bool
+
+		// Check error value
+		if det_value.Float64, found = v.(float64); !found {
+			det_value.Float64 = math.NaN()
+		}
+		if math.IsNaN(det_value.Float64) {
+			det_error.String = "NaN"
+			det_error.Valid = true
+		} else {
+			det_value.Valid = true
+		}
+
 		values = append(values,
 			det.Exp_id,
 			det.Mon_id,
 			det.Time,
 			mon.Values[i-1].Sensor,
 			mon.Values[i-1].ValueIdx,
-			v,
-			"",
+			det_value,
+			det_error,
 		)
 	}
 	sqlInsert = strings.TrimSuffix(sqlInsert, ",")
@@ -1085,9 +1101,10 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResul
 	//fr.DsNames = make([]string, len(mon.Values))
 	//fr.DsData = make([]*FetchResultDBItem, 0)
 
-	var sensor_val_id int;
-	var detection float64;
-	var tm, sensor_id, derror string;
+	var sensor_val_id int
+	var tm, sensor_id string
+	var detection sql.NullFloat64
+	var derror    sql.NullString
 
 	// Load detections
 	var rows *sql.Rows
@@ -1152,7 +1169,18 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResul
 			}
 		}
 
-		fr.DsData = append(fr.DsData, &FetchResultDBItem{t, name, detection, derror});
+		// Convert non valid to NaN value
+		if !detection.Valid {
+			detection.Valid = true
+			detection.Float64 = math.NaN()
+		}
+		// Convert non valid error to empty string value
+		if !derror.Valid {
+			derror.Valid = true
+			derror.String = ""
+		}
+
+		fr.DsData = append(fr.DsData, &FetchResultDBItem{t, name, detection.Float64, derror.String});
 	}
 
 	err = tx.Commit()
@@ -1310,14 +1338,29 @@ func updateStrob(mdb *MonitorDBItem, vals ...interface{}) error {
 
 		sqlInsert += queries["_detections_insert_values"] + ","
 
+		det_error := sql.NullString{String:"", Valid:false}
+		det_value := sql.NullFloat64{Float64:0, Valid:false}
+		var found bool
+
+		// Check error value
+		if det_value.Float64, found = v.(float64); !found {
+			det_value.Float64 = math.NaN()
+		}
+		if math.IsNaN(det_value.Float64) {
+			det_error.String = "NaN"
+			det_error.Valid = true
+		} else {
+			det_value.Valid = true
+		}
+
 		values = append(values,
 			det.Exp_id,
 			det.Mon_id,
 			det.Time,
 			mdb.Values[i-1].Sensor,
 			mdb.Values[i-1].ValueIdx,
-			v,
-			"",
+			det_value,
+			det_error,
 		)
 	}
 	sqlInsert = strings.TrimSuffix(sqlInsert, ",")
