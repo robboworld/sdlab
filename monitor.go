@@ -111,6 +111,7 @@ type ArchiveInfo struct {
 }
 
 type MonitorInfo struct {
+	Active   bool
 	Created  time.Time
 	StopAt   time.Time
 	Last     time.Time
@@ -1076,6 +1077,7 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 	}
 
 	mi := &MonitorInfo{
+		mon.Active,
 		mon.Created,
 		mon.StopAt,
 		last,
