@@ -676,29 +676,34 @@ func initDB(dbconf DatabaseConf) (*sql.DB, error) {
 func (mon *Monitor) Run() error {
 	d := time.Duration(mon.Step) * time.Second
 	t := time.NewTicker(d)
-	readings := make([](chan float64), len(mon.Values))
-	for i := range readings {
-		readings[i] = make(chan float64, 1)
-	}
 	mon.stop = make(chan int, 1)
-	vals := make([]interface{}, len(mon.Values)+1)
 	go func() {
-		for tm := range t.C {
-			if (!mon.StopAt.IsZero()) && mon.StopAt.Before(tm) {
-				mon.Stop()
-			}
-			if len(mon.stop) > 0 {
+		readings := make([](chan float64), len(mon.Values))
+		for i := range readings {
+			readings[i] = make(chan float64, 1)
+		}
+		vals := make([]interface{}, len(mon.Values)+1)
+		for {
+			select {
+			case tm := <-t.C:
+				if (!mon.StopAt.IsZero()) && mon.StopAt.Before(tm) {
+					mon.Stop()
+				}
+				if len(mon.stop) > 0 {
+					return
+				}
+				for i, v := range mon.Values {
+					go getSerData(v.Sensor, v.ValueIdx, readings[i])
+				}
+				vals[0] = tm
+				for i, c := range readings {
+					vals[i+1] = <-c
+					mon.Values[i].previous = vals[i+1].(float64)
+				}
+				mon.Update(vals...)
+			case <-mon.stop:
 				return
 			}
-			for i, v := range mon.Values {
-				go getSerData(v.Sensor, v.ValueIdx, readings[i])
-			}
-			vals[0] = tm
-			for i, c := range readings {
-				vals[i+1] = <-c
-				mon.Values[i].previous = vals[i+1].(float64)
-			}
-			mon.Update(vals...)
 		}
 	}()
 	return nil
@@ -1089,11 +1094,11 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResul
 	}
 
 	fr := &FetchResultDB{
-		Filename: config.Database.Type + ":" + config.Database.Dsn,  // XXX: old, not used
-		Cf:       "AVERAGE",  // XXX: not AVERAGE, just ABSOLUTE now, not used
+		Filename: config.Database.Type + ":" + config.Database.Dsn,  // XXX: old, not used (only for RRD)
+		Cf:       "AVERAGE",  // XXX: not AVERAGE, just ABSOLUTE now, not used (only for RRD)
 		Start:    start,
 		End:      end,
-		Step:     time.Duration(mon.Step) * time.Second,
+		Step:     time.Duration(mon.Step) * time.Second,  // XXX: old, not used (only for RRD)
 		DsNames:  make([]string, len(mon.Values)),
 		RowCnt:   0,
 		DsData:   make([]*FetchResultDBItem, 0),
@@ -1280,12 +1285,12 @@ func runStrobe(mdb *MonitorDBItem, check bool) error {
 		}
 	}
 
-	readings := make([](chan float64), len(mdb.Values))
-	for i := range readings {
-		readings[i] = make(chan float64, 1)
-	}
-	vals := make([]interface{}, len(mdb.Values)+1)
 	go func() {
+		readings := make([](chan float64), len(mdb.Values))
+		for i := range readings {
+			readings[i] = make(chan float64, 1)
+		}
+		vals := make([]interface{}, len(mdb.Values)+1)
 		for i, v := range mdb.Values {
 			go getSerData(v.Sensor, v.ValueIdx, readings[i])
 		}

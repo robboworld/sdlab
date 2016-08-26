@@ -72,37 +72,44 @@ func startSeries(values []ValueId, period time.Duration, count int) (<-chan *Ser
 		for i := range readings {
 			readings[i] = make(chan float64, 1)
 		}
-		for t := range ti.C {
-			for i, v := range values {
-				// sensors are polled simultaneously
-				// to avoid lags
-				go getSerData(v.Sensor, v.ValueIdx, readings[i])
-			}
-			data := SerData{t, make([]float64, len(values))}
-			for i, c := range readings {
-				data.Readings[i] = <-c
-			}
-			if len(out) == int(config.Series.Buffer) {
-				// channel shouldn't be blocked
-				// so we simply drop the oldest dataset
-				<-out
-			}
-			out <- &data
-			// check if we are enforced to stop
-			if len(stop) > 0 {
-				<-stop
+		for {
+			select {
+			case t := <-ti.C:
+				for i, v := range values {
+					// sensors are polled simultaneously
+					// to avoid lags
+					go getSerData(v.Sensor, v.ValueIdx, readings[i])
+				}
+				data := SerData{t, make([]float64, len(values))}
+				for i, c := range readings {
+					data.Readings[i] = <-c
+				}
+				if len(out) == int(config.Series.Buffer) {
+					// channel shouldn't be blocked
+					// so we simply drop the oldest dataset
+					<-out
+				}
+				out <- &data
+				// check if we are enforced to stop
+				if len(stop) > 0 {
+					<-stop
+					close(out)
+					close(finished)
+					return
+				}
+				// or series is complete
+				count--
+				if count == 0 {
+					// stop himself
+					finished <- 1
+					close(finished)
+					close(out)
+					return
+				}
+			case <-stop:
 				close(out)
 				close(finished)
-				break
-			}
-			// or series is complete
-			count--
-			if count == 0 {
-				// stop himself
-				finished <- 1
-				close(finished)
-				close(out)
-				break
+				return
 			}
 		}
 	}()
