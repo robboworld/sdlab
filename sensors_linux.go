@@ -39,8 +39,9 @@ type DataRange struct{ Min, Max float64 }
 type Bus int
 
 const (
-	W1  = Bus(iota)
-	I2C = Bus(iota)
+	W1   = Bus(iota)
+	I2C  = Bus(iota)
+	FILE = Bus(iota)
 )
 
 type Device struct {
@@ -89,6 +90,8 @@ func (bus Bus) String() string {
 		return "w1"
 	case I2C:
 		return "i2c"
+	case FILE:
+		return "file"
 	}
 	return ""
 }
@@ -99,6 +102,8 @@ func busFromString(str string) (Bus, error) {
 		return W1, nil
 	case "i2c", "iic", "twi":
 		return I2C, nil
+	case "file", "stub":
+		return FILE, nil
 	}
 	return Bus(-1), errors.New("wrong bus: '" + str + "'")
 }
@@ -253,6 +258,41 @@ func (sensor Sensor) Search() (PluggedSensors, error) {
 			)
 		}
 		return detected, nil
+	case FILE:
+		// read value from file.
+		// mainly for debugging.
+		// as single bus.
+		detected := make(PluggedSensors, 1)
+
+		// need one or more correct absolute file pathes of sensor Values sources
+		found := 0
+		for n := range sensor.Values {
+			if sensor.Values[n].Command != "" {
+				// command always exists
+				found++
+			} else if path.IsAbs(sensor.Values[n].File) {
+				// check exists and accessible
+				finfo, err := os.Stat(sensor.Values[n].File)
+				if err != nil {
+					continue
+				}
+				if !finfo.IsDir() {
+					// it's a file
+					// TODO: check finfo.Mode() for regular file, symlink and etc.
+					found++
+				}
+			}
+		}
+		if found > 0 {
+			// only one FILE sensor with given address can be connected
+			addr := (uint64(0) << 8) | uint64(sensor.Device.Id)
+			id := fmt.Sprintf("%s-file:%x", sensor.Name, sensor.Device.Id)
+			detected[id] = &PluggedSensor{addr, &sensor}
+			logger.Printf("Detected FILE sensor %s, address 0x%x; assigned ID %s\n",
+				sensor.Name, sensor.Device.Id, id,
+			)
+		}
+		return detected, nil
 	}
 	return nil, errors.New("Unknown sensor type")
 }
@@ -269,6 +309,11 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 			cmd = strings.Replace(sensor.Values[n].Command, "${typ}", fmt.Sprintf("%d", typ), -1)
 			cmd = strings.Replace(cmd, "${addr}", fmt.Sprintf("%d", addr), -1)
 		case I2C:
+			addr := sensor.Address & 0xff
+			bus := sensor.Address >> 8
+			cmd = strings.Replace(sensor.Values[n].Command, "${bus}", fmt.Sprintf("%d", bus), -1)
+			cmd = strings.Replace(cmd, "${addr}", fmt.Sprintf("%d", addr), -1)
+		case FILE:
 			addr := sensor.Address & 0xff
 			bus := sensor.Address >> 8
 			cmd = strings.Replace(sensor.Values[n].Command, "${bus}", fmt.Sprintf("%d", bus), -1)
@@ -315,6 +360,13 @@ func (sensor PluggedSensor) GetData(n int) (data float64, err error) {
 			addr := sensor.Address & 0xff
 			bus := sensor.Address >> 8
 			file = fmt.Sprintf("/sys/bus/i2c/devices/i2c-%d/%x-%04x/%s", bus, bus, addr, sensor.Values[n].File)
+		case FILE:
+			if sensor.Values[n].File == "" {
+				return 0.0, errors.New("No file nor command specified")
+			}
+			err = fmt.Errorf("Relative file path is not supported for bus type '%s'", sensor.Device.Bus)
+			logger.Print(err)
+			return 0.0, err
 		default:
 			logger.Panic("unknown bus")
 		}
