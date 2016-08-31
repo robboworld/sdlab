@@ -84,7 +84,8 @@ type MonitorOpts struct {
 	Exp_id   int
 	Setup_id int
 	Step     uint         // Interval
-	Count    uint         // Amount?
+	Count    uint         // Amount
+	Duration uint         // Duration / time_det
 	StopAt   time.Time
 	Values   []ValueId
 }
@@ -394,8 +395,10 @@ func (lab *Lab) StartMonitor(opts *MonitorOpts, uuid *string) error {
 	if err != nil {
 		return err
 	}
-	logger.Printf("StartMonitor: started %s", mon.UUID.String())
+
 	*uuid = mon.UUID.String()
+
+	logger.Printf("StartMonitor: started %s", *uuid)
 	return nil
 }
 
@@ -405,12 +408,13 @@ func (lab *Lab) StopMonitor(u *string, ok *bool) error {
 		*ok = false
 		return errors.New("Wrong monitor UUID: " + *u)
 	}
+
+	*ok = false
 	err := mon.Stop()
 	if err == nil {
 		*ok = true
-	} else {
-		*ok = false
 	}
+
 	return err
 }
 

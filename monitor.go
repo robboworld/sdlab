@@ -46,6 +46,11 @@ type MonValue struct {
 	previous float64
 }
 
+type MonCounters struct {
+	Done     uint
+	Err      uint
+}
+
 type Monitor struct {
 	Id       int
 	UUID     uuid.UUID
@@ -53,6 +58,7 @@ type Monitor struct {
 	Setup_id int
 	Step     uint         // Interval
 	Amount   uint         // Amount total, 0 if StopAt mode
+	Duration uint         // Duration, in StopAt mode, only passed to database
 	Created  time.Time
 	StopAt   time.Time
 	Active   bool
@@ -60,6 +66,8 @@ type Monitor struct {
 	stop     chan int
 
 	Values   []MonValue
+
+	Counters MonCounters  // Counters
 }
 
 type MonitorDBItem struct {
@@ -69,11 +77,14 @@ type MonitorDBItem struct {
 	Setup_id int
 	Step     uint
 	Amount   uint
+	Duration uint
 	Created  string
 	StopAt   string
 	Active   bool
 
 	Values   []MonValue
+
+	Counters MonCounters
 }
 
 type DetectionItem struct {
@@ -115,6 +126,9 @@ type MonitorInfo struct {
 	Created  time.Time
 	StopAt   time.Time
 	Last     time.Time
+	Amount   uint
+	Duration uint
+	Counters MonCounters
 	Archives []ArchiveInfo
 	Values   []MonValueInfo
 }
@@ -223,19 +237,19 @@ func initQueries(dbtype string) error {
 	queries["monitors_select_by_id"] = `
 		SELECT *
 		FROM monitors
-		WHERE id = ? ;
+		WHERE id = ?;
 	`
 	queries["monitors_count"] = `
 		SELECT COUNT(*)
 		FROM monitors;
 	`
 	queries["monitors_insert"] = `
-		INSERT INTO monitors (uuid, exp_id, setup_id, interval, amount, created, stopat, active)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+		INSERT INTO monitors (uuid, exp_id, setup_id, interval, amount, duration, created, stopat, active)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`
 	queries["monitors_replace"] = `
-		INSERT OR REPLACE INTO monitors (id, uuid, exp_id, setup_id, interval, amount, created, stopat, active)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+		INSERT OR REPLACE INTO monitors (id, uuid, exp_id, setup_id, interval, amount, duration, created, stopat, active)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 	`
 	queries["monitors_delete_by_id"] = `
 		DELETE FROM monitors
@@ -252,6 +266,36 @@ func initQueries(dbtype string) error {
 	queries["_monitors_values_replace_values"] = `(?, ?, ?, ?)`
 	queries["monitors_values_delete_by_uuid"] = `
 		DELETE FROM monitors_values
+		WHERE uuid = ?;
+	`
+
+	// TABLE: monitors_counters
+	queries["monitors_counters_select_by_uuid"] = `
+		SELECT *
+		FROM monitors_counters
+		WHERE uuid = ?;
+	`
+	queries["monitors_counters_replace"] = `
+		INSERT OR REPLACE INTO monitors_counters (uuid, done, err)
+		VALUES (?, ?, ?);
+	`
+	queries["monitors_counters_update_all_by_uuid"] = `
+		UPDATE monitors_counters
+		SET done = done + ?, err = err + ?
+		WHERE uuid = ?;
+	`
+	queries["monitors_counters_update_done_by_uuid"] = `
+		UPDATE monitors_counters
+		SET done = done + ?
+		WHERE uuid = ?;
+	`
+	queries["monitors_counters_update_err_by_uuid"] = `
+		UPDATE monitors_counters
+		SET err = err + ?
+		WHERE uuid = ?;
+	`
+	queries["monitors_counters_delete_by_uuid"] = `
+		DELETE FROM monitors_counters
 		WHERE uuid = ?;
 	`
 
@@ -357,6 +401,8 @@ func prepareDB() error {
 
 func monitorToDB(mon *Monitor) (monDBi *MonitorDBItem, err error) {
 	uuid := mon.UUID.String()
+	values := make([]MonValue, len(mon.Values))
+	copy(values, mon.Values)
 	monDBi = &MonitorDBItem{
 		mon.Id,
 		uuid,
@@ -364,11 +410,13 @@ func monitorToDB(mon *Monitor) (monDBi *MonitorDBItem, err error) {
 		mon.Setup_id,
 		mon.Step,
 		mon.Amount,
+		mon.Duration,
 		mon.Created.UTC().Format(time.RFC3339Nano),
 		mon.StopAt.UTC().Format(time.RFC3339Nano),
 		mon.Active,
 
-		mon.Values,
+		values,
+		mon.Counters,
 	}
 	return monDBi, nil
 }
@@ -400,10 +448,13 @@ func monitorFromDB(mondbi *MonitorDBItem) (mon *Monitor, err error) {
 	if len(string(mondbi.Amount)) > 0 {
 		amount, _ = strconv.Atoi(mondbi.Amount)
 	}
-	for i, v := range mondbi.Values {
-		mondbi.Values[i] = mondbi.Values[i]
+	duration := 0
+	if len(string(mondbi.Duration)) > 0 {
+		duration, _ = strconv.Atoi(mondbi.Duration)
 	}
 	*/
+	values := make([]MonValue, len(mondbi.Values))
+	copy(values, mondbi.Values)
 	mon = &Monitor{
 		mondbi.Id,
 		uuid,
@@ -411,11 +462,14 @@ func monitorFromDB(mondbi *MonitorDBItem) (mon *Monitor, err error) {
 		mondbi.Setup_id,
 		mondbi.Step,
 		mondbi.Amount,
+		mondbi.Duration,
 		created,
 		stopAt,
 		mondbi.Active,
+
 		nil,
-		mondbi.Values,
+		values,
+		mondbi.Counters,
 	}
 	return mon, nil
 }
@@ -442,6 +496,7 @@ func loadMonitor(monid int) (*Monitor, error) {
 		&mondbi.Setup_id,
 		&mondbi.Step,
 		&mondbi.Amount,
+		&mondbi.Duration,
 		&mondbi.Created,
 		&mondbi.StopAt,
 		&mondbi.Active,
@@ -449,6 +504,7 @@ func loadMonitor(monid int) (*Monitor, error) {
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// there were no rows, but otherwise no error occurred
+			err = errors.New("Fatal Monitor Select Stmt QueryRow: " + err.Error())
 			return nil, err
 		} else {
 			//fmt.Printf(LPURPLE+"loadMonitor#%05d:"+RED+" Fatal Monitor Select Stmt QueryRow %s, continue\n"+NCO, monid, err)
@@ -477,11 +533,9 @@ func loadMonitor(monid int) (*Monitor, error) {
 		return nil, err2
 	}
 	defer rows.Close()
-
+	monuuid := ""
 	for rows.Next() {
-
 		monv := new(MonValue)
-		monuuid := ""
 
 		err = rows.Scan(&monuuid, &monv.Name, &monv.Sensor, &monv.ValueIdx)
 		if err != nil {
@@ -492,6 +546,27 @@ func loadMonitor(monid int) (*Monitor, error) {
 		}
 
 		mondbi.Values = append(mondbi.Values, *monv)
+	}
+
+	// Load Monitor Counters
+	row = tx.Stmt(stmts["monitors_counters_select_by_uuid"]).QueryRow(mondbi.UUID)
+	err = row.Scan(&monuuid, &mondbi.Counters.Done, &mondbi.Counters.Err)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// there were no rows, but otherwise no error occurred
+			err = errors.New("Fatal Monitor Counters Select Stmt QueryRow: " + err.Error())
+			return nil, err
+		} else {
+			//fmt.Printf(LPURPLE+"loadMonitor#%05d:"+RED+" Fatal Monitor Counters Select Stmt QueryRow %s, continue\n"+NCO, monid, err)
+			logger.Print("Fatal Monitor Counters Select Stmt QueryRow: " + err.Error())
+			err2 = tx.Rollback()
+			if err2 != nil {
+				//fmt.Printf(LPURPLE+"loadMonitor#%05d:"+RED+" Fatal Monitor Counters Select Stmt Rollback %s, continue\n"+NCO, monid, err2)
+				logger.Print("Fatal Monitor Counters Select Stmt Rollback: " + err2.Error())
+				return nil, err2
+			}
+			return nil, err
+		}
 	}
 
 	err = tx.Commit()
@@ -507,10 +582,6 @@ func loadMonitor(monid int) (*Monitor, error) {
 		return nil, err
 	}
 
-	//if mon.Active {
-	//	err = mon.Run()
-	//}
-
 	return mon, err
 }
 
@@ -518,7 +589,7 @@ func loadMonitor(monid int) (*Monitor, error) {
 // state active.
 func loadRunMonitors() error {
 	var err, err2 error
-	var monid int = 0
+	var monid int
 
 	logger.Print("Loading monitors...")
 
@@ -569,7 +640,7 @@ func loadRunMonitors() error {
 	uuids := make([]string, 0)  // DEBUG
 
 	// Collect monitor ids
-	monids := make([]int, 0)
+	monids := make([]int, 0, count)
 	for rows.Next() {
 		monid = 0
 
@@ -598,6 +669,7 @@ func loadRunMonitors() error {
 	}
 
 	// Load
+	count = 0
 	for _, monid = range monids {
 		mon, err := loadMonitor(monid)
 		if err != nil {
@@ -606,7 +678,16 @@ func loadRunMonitors() error {
 		}
 
 		if mon.Active {
-			if mon.StopAt.IsZero() || mon.StopAt.After(time.Now()) {
+			run := true
+			if (!mon.StopAt.IsZero()) && mon.StopAt.Before(time.Now()) {
+				// condition for Duration or/and Amount mode (with deadline time)
+				run = false
+			} else if (mon.Amount > 0) && (mon.Counters.Done >= mon.Amount) {
+				// condition only for Amount mode
+				run = false
+			}
+
+			if run {
 				err = mon.Run()
 			} else {
 				mon.Active = false
@@ -618,6 +699,7 @@ func loadRunMonitors() error {
 		}
 		monitors[mon.UUID.String()] = mon
 
+		count++
 		uuids = append(uuids, mon.UUID.String())
 	}
 
@@ -688,6 +770,10 @@ func (mon *Monitor) Run() error {
 			select {
 			case tm := <-t.C:
 				if (!mon.StopAt.IsZero()) && mon.StopAt.Before(tm) {
+					// condition for Duration or/and Amount mode (with deadline time)
+					mon.Stop()
+				} else if (mon.Amount > 0) && (mon.Counters.Done >= mon.Amount) {
+					// condition only for Amount mode
 					mon.Stop()
 				}
 				if len(mon.stop) > 0 {
@@ -701,6 +787,7 @@ func (mon *Monitor) Run() error {
 					vals[i+1] = <-c
 					mon.Values[i].previous = vals[i+1].(float64)
 				}
+				mon.incCounters(vals...)
 				mon.Update(vals...)
 			case <-mon.stop:
 				return
@@ -710,139 +797,59 @@ func (mon *Monitor) Run() error {
 	return nil
 }
 
-func (mon *Monitor) Update(vals ...interface{}) error {
-	var err,err2 error
-
-	if len(vals) < 2 {
-		/*
-		errf := fmt.Errorf("Update Error: no new detections for %s", mon.UUID.String())
-		if errf != nil {
-			return errf
-		}
-		*/
-		return nil
-	}
-
-	var nulltime time.Time
-	tm, ok := vals[0].(time.Time)
-	if !ok {
-		tm = nulltime
-	}
-
-	det := DetectionDBItem{
-		Id:             0,
-		Exp_id:         mon.Exp_id,
-		Mon_id:         mon.Id,
-		Time:           tm.UTC().Format(time.RFC3339Nano),
-		Sensor_id:      "",
-		Sensor_val_id:  0,
-		Detection:      0,
-		Error:          "",  // TODO: remode old error field
-	}
-
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-
-	sqlInsert := queries["_detections_insert_into"] + " VALUES "
-	values := []interface{}{}
+func (mon *Monitor) incCounters(vals ...interface{}) {
+	// Check for errors
+	is_err := false
 	for i, v := range vals {
 		if i == 0 {
 			// Skip time
 			continue
 		}
 
-		sqlInsert += queries["_detections_insert_values"] + ","
-
-		det_error := sql.NullString{String:"", Valid:false}
-		det_value := sql.NullFloat64{Float64:0, Valid:false}
-		var found bool
-
 		// Check error value
-		if det_value.Float64, found = v.(float64); !found {
-			det_value.Float64 = math.NaN()
+		detection, found := v.(float64)
+		if !found {
+			is_err = true
+			break
 		}
-		if math.IsNaN(det_value.Float64) {
-			det_error.String = "NaN"
-			det_error.Valid = true
-		} else {
-			det_value.Valid = true
+		if math.IsNaN(detection) {
+			is_err = true
+			break
 		}
-
-		values = append(values,
-			det.Exp_id,
-			det.Mon_id,
-			det.Time,
-			mon.Values[i-1].Sensor,
-			mon.Values[i-1].ValueIdx,
-			det_value,
-			det_error,
-		)
 	}
-	sqlInsert = strings.TrimSuffix(sqlInsert, ",")
-	logger.Printf("Update: Debug sqlInsert: %s", sqlInsert)
-	logger.Printf("Update: Debug sqlInsert vals: %+v", values)
-	// Prepare the statement
-	stmt, err := tx.Prepare(sqlInsert)
-	if err != nil {
-		err2 = tx.Rollback()
-		if err2 != nil {
-			return err2
-		}
-
-		return err
+	if len(vals) < 2 {
+		is_err = true
 	}
 
-	// Execute
-	//res, err := stmt.Exec(values...)
-	_, err = stmt.Exec(values...)
-	if err != nil {
-		err2 = tx.Rollback()
-		if err2 != nil {
-			return err2
-		}
-
-		return err
+	//Increment counters
+	mon.Counters.Done++
+	if is_err {
+		mon.Counters.Err++
 	}
-
-	//logger.Printf("Update: Inserted for Monitor %s Count Detections %d", mon.Id, res.RowsAffected())
-
-	err = tx.Commit()
-	if err != nil {
-		//fmt.Printf(LBLUE+"Update:"+RED+" Fatal Commit Update Detections for %s: %s\n"+NCO, mon.UUID.String(), err.Error())
-		//logger.Printf("Update: Fatal Commit Update Detections for %s: %s", mon.UUID.String(), err.Error())
-		return err
-	}
-
-	//fmt.Printf(LBLUE+"Update %-23s:"+NCO+" insert detections\n", time.Now().Format("2006-01-02T15:04:05.999"))
-	//logger.Printf("Update %-23s: insert detections for %s", time.Now().Format("2006-01-02T15:04:05.999"), mon.UUID.String())
-
-	return nil
 }
 
-func (mon *Monitor) Stop() error {
-	if !mon.Active {
-		return errors.New("Monitor " + mon.UUID.String() + " is inactive")
-	}
-	mon.stop <- 1
-	mon.Active = false
-	logger.Print("Monitor.Stop: ok")
-	return mon.Save()
-}
-
-func (mon *Monitor) Save() error {
+func (mon *Monitor) Update(vals ...interface{}) error {
 	var err,err2 error
-	var isnew bool = false
 
-	// New Monitor or Edit Monitor
-	if mon.Id == 0 {
-		isnew = true
-	}
-
+	is_err := false
+	no_data := false
+	
+	// Works with mon copy
+	// TODO: fix concurrent read access with sync.RWMutex, mon.RLock()
 	monDBi, err := monitorToDB(mon)
 	if err != nil {
 		return err
+	}
+
+	if len(vals) < 2 {
+		/*
+		errf := fmt.Errorf("Update Error: no new detections for %s", monDBi.UUID))
+		if errf != nil {
+			return errf
+		}
+		*/
+		is_err = true
+		no_data = true
 	}
 
 	tx, err := db.Begin()
@@ -850,93 +857,72 @@ func (mon *Monitor) Save() error {
 		return err
 	}
 
-	// Insert / Update monitor
-	if !isnew {
-		_, err = tx.Stmt(stmts["monitors_replace"]).Exec(
-			monDBi.Id,
-			monDBi.UUID,
-			monDBi.Exp_id,
-			monDBi.Setup_id,
-			monDBi.Step,
-			monDBi.Amount,
-			monDBi.Created,
-			monDBi.StopAt,
-			monDBi.Active,
-		)
-		if err != nil {
-			err2 = tx.Rollback()
-			if err2 != nil {
-				//fmt.Printf(LBLUE+"Save:"+RED+" Fatal Save Monitor Replace Stmt Rollback %s, exiting\n"+NCO, err2)
-				//logger.Printf("Fatal Save Monitor Replace Stmt Rollback %s: %s: ", monDBi.UUID, err2.Error())
-				return err2
-			}
-			return err
-		}
-	} else {
-		res, err := tx.Stmt(stmts["monitors_insert"]).Exec(
-			monDBi.UUID,
-			monDBi.Exp_id,
-			monDBi.Setup_id,
-			monDBi.Step,
-			monDBi.Amount,
-			monDBi.Created,
-			monDBi.StopAt,
-			monDBi.Active,
-		)
-		if err != nil {
-			err2 = tx.Rollback()
-			if err2 != nil {
-				//fmt.Printf(LBLUE+"Save:"+RED+" Fatal Save Monitor Insert Stmt Rollback %s, exiting\n"+NCO, err2)
-				//logger.Printf("Fatal Save Monitor Insert Stmt Rollback %s: %s: ", monDBi.UUID, err2.Error())
-				return err2
-			}
-			return err
+	// Update Detections
+	if !no_data {
+		var nulltime time.Time
+		tm, ok := vals[0].(time.Time)
+		if !ok {
+			tm = nulltime
 		}
 
-		id, err := res.LastInsertId()
-		if err != nil {
-			// not supported? ErrNotSupported?
-
-			err2 = tx.Rollback()
-			if err2 != nil {
-				//fmt.Printf(LBLUE+"Save:"+RED+" Fatal Save Monitor LastInsertId Stmt Rollback %s, exiting\n"+NCO, err2)
-				//logger.Printf("Fatal Save Monitor LastInsertId Stmt Rollback %s: %s: ", monDBi.UUID, err2.Error())
-				return err2
-			}
-			return err
+		det := DetectionDBItem{
+			Id:             0,
+			Exp_id:         monDBi.Exp_id,
+			Mon_id:         monDBi.Id,
+			Time:           tm.UTC().Format(time.RFC3339Nano),
+			Sensor_id:      "",
+			Sensor_val_id:  0,
+			Detection:      0,
+			Error:          "",  // TODO: remode old error field
 		}
 
-		// assign returned id
-		// XXX: issue with overflow may be here, need int64 type in structs
-		monDBi.Id = int(id)
-		mon.Id = int(id)
-	}
-
-	// Save Monitor Values
-	// only once
-	if isnew {
-		sqlInsert := queries["_monitors_values_replace_into"] + " VALUES "
+		sqlInsert := queries["_detections_insert_into"] + " VALUES "
 		values := []interface{}{}
-		for _, monv := range monDBi.Values {
-			sqlInsert += queries["_monitors_values_replace_values"] + ","
+		for i, v := range vals {
+			if i == 0 {
+				// Skip time
+				continue
+			}
+
+			sqlInsert += queries["_detections_insert_values"] + ","
+
+			det_error := sql.NullString{String:"", Valid:false}
+			det_value := sql.NullFloat64{Float64:0, Valid:false}
+			var found bool
+
+			// Check error value
+			if det_value.Float64, found = v.(float64); !found {
+				det_value.Float64 = math.NaN()
+			}
+			if math.IsNaN(det_value.Float64) {
+				det_error.String = "NaN"
+				det_error.Valid = true
+				is_err = true
+			} else {
+				det_value.Valid = true
+			}
+
 			values = append(values,
-				monDBi.UUID,
-				monv.Name,
-				monv.Sensor,
-				monv.ValueIdx,
+				det.Exp_id,
+				det.Mon_id,
+				det.Time,
+				monDBi.Values[i-1].Sensor,
+				monDBi.Values[i-1].ValueIdx,
+				det_value,
+				det_error,
 			)
 		}
 		sqlInsert = strings.TrimSuffix(sqlInsert, ",")
-
+		logger.Printf("Update: Debug sqlInsert: %s", sqlInsert)
+		logger.Printf("Update: Debug sqlInsert vals: %+v", values)
 		// Prepare the statement
 		stmt, err := tx.Prepare(sqlInsert)
 		if err != nil {
 			err2 = tx.Rollback()
 			if err2 != nil {
-				//fmt.Printf(LBLUE+"Save:"+RED+" Fatal Save Monitor Insert Prepare Rollback %s, exiting\n"+NCO, err2)
-				//logger.Printf("Fatal Save Monitor Insert Prepare Rollback %s: %s: ", monDBi.UUID, err2.Error())
 				return err2
 			}
+
 			return err
 		}
 
@@ -946,14 +932,238 @@ func (mon *Monitor) Save() error {
 		if err != nil {
 			err2 = tx.Rollback()
 			if err2 != nil {
-				//fmt.Printf(LBLUE+"Save:"+RED+" Fatal Save Monitor Insert Exec Rollback %s, exiting\n"+NCO, err2)
-				//logger.Printf("Fatal Save Monitor Insert Exec Rollback %s: %s: ", monDBi.UUID, err2.Error())
 				return err2
 			}
+
 			return err
 		}
 
-		//logger.Printf("Save: Inserted for Monitor %s Count Values %d", monDBi.UUID, res.RowsAffected())
+		//logger.Printf("Update: Inserted for Monitor %s Count Detections %d", monDBi.Id, res.RowsAffected())
+	}
+
+	// Update Counters
+	// Execute
+	if is_err {
+		//res, err = tx.Stmt(stmts["monitors_counters_update_all_by_uuid"]).Exec(1, 1, monDBi.UUID)
+		_, err = tx.Stmt(stmts["monitors_counters_update_all_by_uuid"]).Exec(1, 1, monDBi.UUID)
+	} else {
+		//res, err = tx.Stmt(stmts["monitors_counters_update_done_by_uuid"]).Exec(1, monDBi.UUID)
+		_, err = tx.Stmt(stmts["monitors_counters_update_done_by_uuid"]).Exec(1, monDBi.UUID)
+	}
+	if err != nil {
+		err2 = tx.Rollback()
+		if err2 != nil {
+			//fmt.Printf(LBLUE+"Save:"+RED+" Fatal Save Monitor Counters Update Stmt Rollback %s, exiting\n"+NCO, err2)
+			//logger.Printf("Fatal Save Monitor Counters Update Stmt Rollback %s: %s: ", monDBi.UUID, err2.Error())
+			return err2
+		}
+		return err
+	}
+
+	//logger.Printf("Update: Updated for Monitor %s Counters %d", monDBi.Id, res.RowsAffected())
+
+	err = tx.Commit()
+	if err != nil {
+		//fmt.Printf(LBLUE+"Update:"+RED+" Fatal Commit Update Detections for %s: %s\n"+NCO, monDBi.UUID, err.Error())
+		//logger.Printf("Update: Fatal Commit Update Detections for %s: %s", monDBi.UUID, err.Error())
+		return err
+	}
+
+	//fmt.Printf(LBLUE+"Update %-23s:"+NCO+" insert detections\n", time.Now().Format("2006-01-02T15:04:05.999"))
+	//logger.Printf("Update %-23s: insert detections for %s", time.Now().Format("2006-01-02T15:04:05.999"), monDBi.UUID)
+
+	return nil
+}
+
+func (mon *Monitor) Stop() error {
+	// TODO: fix concurrent read/write access with sync.RWMutex
+	if !mon.Active {
+		//logger.Print("Monitor " + mon.UUID.String() + " is inactive")
+		return nil
+	}
+
+	select {
+	case mon.stop <- 1:
+	default:
+	}
+
+	mon.Active = false
+	logger.Print("Monitor.Stop: ok")
+
+	return mon.Save()
+}
+
+func (mon *Monitor) SaveNew() error {
+	var err,err2 error
+
+	// Works with mon copy
+	// TODO: fix concurrent read access with sync.RWMutex, mon.RLock()
+	monDBi, err := monitorToDB(mon)
+	if err != nil {
+		return err
+	}
+
+	// as New Monitor
+	monDBi.Id = 0
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	// Insert new monitor
+	res, err := tx.Stmt(stmts["monitors_insert"]).Exec(
+		monDBi.UUID,
+		monDBi.Exp_id,
+		monDBi.Setup_id,
+		monDBi.Step,
+		monDBi.Amount,
+		monDBi.Duration,
+		monDBi.Created,
+		monDBi.StopAt,
+		monDBi.Active,
+	)
+	if err != nil {
+		err2 = tx.Rollback()
+		if err2 != nil {
+			//fmt.Printf(LBLUE+"SaveNew:"+RED+" Fatal Save Monitor Insert Stmt Rollback %s, exiting\n"+NCO, err2)
+			//logger.Printf("Fatal Save Monitor Insert Stmt Rollback %s: %s: ", monDBi.UUID, err2.Error())
+			return err2
+		}
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		// not supported? ErrNotSupported?
+
+		err2 = tx.Rollback()
+		if err2 != nil {
+			//fmt.Printf(LBLUE+"SaveNew:"+RED+" Fatal Save Monitor LastInsertId Stmt Rollback %s, exiting\n"+NCO, err2)
+			//logger.Printf("Fatal Save Monitor LastInsertId Stmt Rollback %s: %s: ", monDBi.UUID, err2.Error())
+			return err2
+		}
+		return err
+	}
+
+	// assign returned id
+	// XXX: issue with overflow may be here, need int64 type in structs
+	monDBi.Id = int(id)
+	// TODO: fix concurrent write access with sync.RWMutex, mon.Lock(), but there are no runned mon yet, just creation
+	mon.Id = int(id)
+
+	// Save Monitor Values
+	// only once
+	sqlInsert := queries["_monitors_values_replace_into"] + " VALUES "
+	values := []interface{}{}
+	for _, monv := range monDBi.Values {
+		sqlInsert += queries["_monitors_values_replace_values"] + ","
+		values = append(values,
+			monDBi.UUID,
+			monv.Name,
+			monv.Sensor,
+			monv.ValueIdx,
+		)
+	}
+	sqlInsert = strings.TrimSuffix(sqlInsert, ",")
+
+	// Prepare the statement
+	stmt, err := tx.Prepare(sqlInsert)
+	if err != nil {
+		err2 = tx.Rollback()
+		if err2 != nil {
+			//fmt.Printf(LBLUE+"SaveNew:"+RED+" Fatal Save Monitor Values Insert Prepare Rollback %s, exiting\n"+NCO, err2)
+			//logger.Printf("Fatal Save Monitor Values Insert Prepare Rollback %s: %s: ", monDBi.UUID, err2.Error())
+			return err2
+		}
+		return err
+	}
+
+	// Execute
+	//res, err := stmt.Exec(values...)
+	_, err = stmt.Exec(values...)
+	if err != nil {
+		err2 = tx.Rollback()
+		if err2 != nil {
+			//fmt.Printf(LBLUE+"SaveNew:"+RED+" Fatal Save Monitor Values Insert Exec Rollback %s, exiting\n"+NCO, err2)
+			//logger.Printf("Fatal Save Monitor Values Insert Exec Rollback %s: %s: ", monDBi.UUID, err2.Error())
+			return err2
+		}
+		return err
+	}
+
+	//logger.Printf("SaveNew: Inserted for Monitor %s Count Values %d", monDBi.UUID, res.RowsAffected())
+
+	// Save Monitor Counters
+	// only once
+	// Execute
+	//res, err := tx.Stmt(stmts["monitors_counters_replace"]).Exec(monDBi.UUID, 0, 0)
+	_, err = tx.Stmt(stmts["monitors_counters_replace"]).Exec(monDBi.UUID, 0, 0)
+	if err != nil {
+		err2 = tx.Rollback()
+		if err2 != nil {
+			//fmt.Printf(LBLUE+"SaveNew:"+RED+" Fatal Save Monitor Counters Insert Stmt Rollback %s, exiting\n"+NCO, err2)
+			//logger.Printf("Fatal Save Monitor Counters Insert Stmt Rollback %s: %s: ", monDBi.UUID, err2.Error())
+			return err2
+		}
+		return err
+	}
+
+	//logger.Printf("SaveNew: Inserted for Monitor %s Counters %d", monDBi.UUID, res.RowsAffected())
+
+	err = tx.Commit()
+	if err != nil {
+		//fmt.Printf(LBLUE+"SaveNew:"+RED+" Fatal Commit Save Monitor %s\n"+NCO, monDBi.UUID, err)
+		//logger.Printf("Fatal Commit Save Monitor %s: %s", monDBi.UUID, err.Error())
+		return err
+	}
+
+	//fmt.Printf(LBLUE+"SaveNew %-23s:"+NCO+" saved monitor %s\n", time.Now().Format("2006-01-02T15:04:05.999"), monDBi.UUID)
+	//logger.Printf("SaveNew %-23s: saved monitor %s", time.Now().Format("2006-01-02T15:04:05.999"), monDBi.UUID)
+
+	return nil
+}
+
+func (mon *Monitor) Save() error {
+	var err,err2 error
+
+	// Works with mon copy
+	// TODO: fix concurrent read access with sync.RWMutex, mon.RLock()
+	monDBi, err := monitorToDB(mon)
+	if err != nil {
+		return err
+	}
+
+	// only Edit Monitor
+	if monDBi.Id == 0 {
+		return errors.New("monitor not saved, incorrect id");
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	// Update monitor
+	_, err = tx.Stmt(stmts["monitors_replace"]).Exec(
+		monDBi.Id,
+		monDBi.UUID,
+		monDBi.Exp_id,
+		monDBi.Setup_id,
+		monDBi.Step,
+		monDBi.Amount,
+		monDBi.Duration,
+		monDBi.Created,
+		monDBi.StopAt,
+		monDBi.Active,
+	)
+	if err != nil {
+		err2 = tx.Rollback()
+		if err2 != nil {
+			//fmt.Printf(LBLUE+"Save:"+RED+" Fatal Save Monitor Replace Stmt Rollback %s, exiting\n"+NCO, err2)
+			//logger.Printf("Fatal Save Monitor Replace Stmt Rollback %s: %s: ", monDBi.UUID, err2.Error())
+			return err2
+		}
+		return err
 	}
 
 	err = tx.Commit()
@@ -972,13 +1182,46 @@ func (mon *Monitor) Save() error {
 func (mon *Monitor) Info() (*MonitorInfo, error) {
 	var err, err2 error
 
+	// Works with mon copy
+	// TODO: fix concurrent read access with sync.RWMutex, mon.RLock()
+	monDBi, err := monitorToDB(mon)
+	if err != nil {
+		return nil, err
+	}
+	created := mon.Created
+	stopat := mon.StopAt
+
 	tx, err := db.Begin()
 	if err != nil {
 		return nil, err
 	}
 
+	// Get counters
+	row := tx.Stmt(stmts["monitors_counters_select_by_uuid"]).QueryRow(monDBi.UUID)
+	monuuid := ""
+	counters := MonCounters{}
+	// XXX: can use monDBi.Counters, but its in mon in memory, mon counters may be not equal to stored to db values
+	err = row.Scan(&monuuid, &counters.Done, &counters.Err)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// there were no rows, but otherwise no error occurred
+			counters.Done = 0
+			counters.Err = 0
+		} else {
+			//fmt.Printf(LPURPLE+"Info:"+RED+" Fatal Select Monitors Counters Stmt %s, exiting\n"+NCO, err)
+			logger.Print("Fatal Select Monitors Counters Stmt Query: " + err.Error())
+			err2 = tx.Rollback()
+			if err2 != nil {
+				//fmt.Printf(LPURPLE+"Info:"+RED+" Fatal Select Monitors Counters Stmt Rollback %s, exiting\n"+NCO, err2)
+				logger.Print("Fatal Select Monitors Counters Stmt Rollback: " + err2.Error())
+				return nil, err2
+			}
+			return nil, err
+		}
+	}
+
 	// Count grouped detections
-	row := tx.Stmt(stmts["detections_count_by_monitor_grouptime"]).QueryRow(mon.Id)
+	row = tx.Stmt(stmts["detections_count_by_monitor_grouptime"]).QueryRow(monDBi.Id)
 	var alen uint = 0
 	err = row.Scan(&alen)
 	if err != nil {
@@ -999,7 +1242,7 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 	}
 
 	// Get last detection time
-	row = tx.Stmt(stmts["detections_select_last_time_by_monitor"]).QueryRow(mon.Id)
+	row = tx.Stmt(stmts["detections_select_last_time_by_monitor"]).QueryRow(monDBi.Id)
 	var nulltime time.Time
 	lasttxt, last := "", nulltime
 	err = row.Scan(&lasttxt)
@@ -1027,21 +1270,21 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 	ai := make([]ArchiveInfo, n)
 	for i := range ai {
 		ai[i] = ArchiveInfo{
-			mon.Step, // archive data step
+			monDBi.Step, // archive data step
 			alen,
 		}
 	}
 
 	// Get Values data
 	var vlen uint
-	vi := make([]MonValueInfo, len(mon.Values))
+	vi := make([]MonValueInfo, len(monDBi.Values))
 	for i := range vi {
 		// Count separate Values
 		vlen = 0
 		row = tx.Stmt(stmts["detections_count_by_monitor_sensor"]).QueryRow(
-			mon.Id,
-			mon.Values[i].Sensor,
-			mon.Values[i].ValueIdx,
+			monDBi.Id,
+			monDBi.Values[i].Sensor,
+			monDBi.Values[i].ValueIdx,
 		)
 		err = row.Scan(&vlen)
 		if err != nil {
@@ -1062,9 +1305,9 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 		}
 
 		vi[i] = MonValueInfo{
-			mon.Values[i].Name,
-			mon.Values[i].Sensor,
-			mon.Values[i].ValueIdx,
+			monDBi.Values[i].Name,
+			monDBi.Values[i].Sensor,
+			monDBi.Values[i].ValueIdx,
 			vlen,
 		}
 	}
@@ -1077,10 +1320,13 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 	}
 
 	mi := &MonitorInfo{
-		mon.Active,
-		mon.Created,
-		mon.StopAt,
+		monDBi.Active,
+		created,
+		stopat,
 		last,
+		monDBi.Amount,
+		monDBi.Duration,
+		counters,
 		ai,
 		vi,
 	}
@@ -1089,6 +1335,13 @@ func (mon *Monitor) Info() (*MonitorInfo, error) {
 
 func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResultDB, error) {
 	var err, err2 error
+
+	// Works with mon copy
+	// TODO: fix concurrent read access with sync.RWMutex, mon.RLock()
+	monDBi, err := monitorToDB(mon)
+	if err != nil {
+		return nil, err
+	}
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -1100,12 +1353,12 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResul
 		Cf:       "AVERAGE",  // XXX: not AVERAGE, just ABSOLUTE now, not used (only for RRD)
 		Start:    start,
 		End:      end,
-		Step:     time.Duration(mon.Step) * time.Second,  // XXX: old, not used (only for RRD)
-		DsNames:  make([]string, len(mon.Values)),
+		Step:     time.Duration(monDBi.Step) * time.Second,  // XXX: old, not used (only for RRD)
+		DsNames:  make([]string, len(monDBi.Values)),
 		RowCnt:   0,
 		DsData:   make([]*FetchResultDBItem, 0),
 	}
-	//fr.DsNames = make([]string, len(mon.Values))
+	//fr.DsNames = make([]string, len(monDBi.Values))
 	//fr.DsData = make([]*FetchResultDBItem, 0)
 
 	var sensor_val_id int
@@ -1117,21 +1370,21 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResul
 	var rows *sql.Rows
 	if start.IsZero() && end.IsZero() {
 		rows, err = tx.Stmt(stmts["detections_select_by_monitor"]).Query(
-			mon.Id,
+			monDBi.Id,
 		)
 	} else if start.IsZero() {
 		rows, err = tx.Stmt(stmts["detections_select_by_monitor_time_to"]).Query(
-			mon.Id,
+			monDBi.Id,
 			end.UTC().Format(time.RFC3339Nano),
 		)
 	} else if end.IsZero() {
 		rows, err = tx.Stmt(stmts["detections_select_by_monitor_time_from"]).Query(
-			mon.Id,
+			monDBi.Id,
 			start.UTC().Format(time.RFC3339Nano),
 		)
 	} else {
 		rows, err = tx.Stmt(stmts["detections_select_by_monitor_time_range"]).Query(
-			mon.Id,
+			monDBi.Id,
 			start.UTC().Format(time.RFC3339Nano),
 			end.UTC().Format(time.RFC3339Nano),
 		)
@@ -1169,7 +1422,7 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResul
 		// Link with DsNames by name
 		// Search Name by unique sensor info
 		name := ""
-		for _, v := range mon.Values {
+		for _, v := range monDBi.Values {
 			if v.Sensor == sensor_id && v.ValueIdx == sensor_val_id {
 				name = v.Name
 				break
@@ -1200,7 +1453,7 @@ func (mon *Monitor) Fetch(start, end time.Time, step time.Duration) (*FetchResul
 	fr.RowCnt = len(fr.DsData)
 
 	for i := range fr.DsNames {
-		fr.DsNames[i] = mon.Values[i].Name;
+		fr.DsNames[i] = monDBi.Values[i].Name;
 	}
 
 	return fr, err
@@ -1217,7 +1470,14 @@ func (mon *Monitor) Remove(wdata bool) error {
 		}
 	}
 	delete(monitors, mon.UUID.String())
-	
+
+	// Works with mon copy
+	// TODO: fix concurrent read access with sync.RWMutex, mon.RLock()
+	monDBi, err := monitorToDB(mon)
+	if err != nil {
+		return err
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -1225,7 +1485,7 @@ func (mon *Monitor) Remove(wdata bool) error {
 
 	// Delete monitor detections data
 	if wdata {
-		_, err = tx.Stmt(stmts["detections_delete_by_monitor"]).Exec(mon.Id)
+		_, err = tx.Stmt(stmts["detections_delete_by_monitor"]).Exec(monDBi.Id)
 		if err != nil {
 			errcnt++
 			logger.Print("error removing monitor data: " + err.Error())
@@ -1233,15 +1493,24 @@ func (mon *Monitor) Remove(wdata bool) error {
 	}
 
 	// Delete monitor values
-	mon.Values = nil
-	_, err = tx.Stmt(stmts["monitors_values_delete_by_uuid"]).Exec(mon.UUID.String())
+	//mon.Values = nil
+	_, err = tx.Stmt(stmts["monitors_values_delete_by_uuid"]).Exec(monDBi.UUID)
 	if err != nil {
 		errcnt++
 		logger.Print("error removing monitor values: " + err.Error())
 	}
 
+	// Delete monitor counters
+	//mon.Counters.Done = 0
+	//mon.Counters.Err = 0
+	_, err = tx.Stmt(stmts["monitors_counters_delete_by_uuid"]).Exec(monDBi.UUID)
+	if err != nil {
+		errcnt++
+		logger.Print("error removing monitor counters: " + err.Error())
+	}
+
 	// Delete monitor
-	_, err = tx.Stmt(stmts["monitors_delete_by_id"]).Exec(mon.Id)
+	_, err = tx.Stmt(stmts["monitors_delete_by_id"]).Exec(monDBi.Id)
 	if err != nil {
 		errcnt++
 		logger.Print("error removing monitor configuration: " + err.Error())
@@ -1263,21 +1532,21 @@ func (mon *Monitor) Remove(wdata bool) error {
 
 	// Result error
 	if errcnt > 0 {
-		err = fmt.Errorf("error removing monitor: %d : %s", mon.Id, mon.UUID.String())
+		err = fmt.Errorf("error removing monitor: %d : %s", monDBi.Id, monDBi.UUID)
 	}
 	return err
 }
 
-func runStrobe(mdb *MonitorDBItem, check bool) error {
+func runStrobe(monDBi *MonitorDBItem, check bool) error {
 	// Use monitor data (also sensors) to make one detections strobe
 
 	if check {
 		// Check values
-		if len(mdb.Values) == 0 {
+		if len(monDBi.Values) == 0 {
 			return errors.New("no sensors selected")
 		}
 		// Check that values are available
-		for _, v := range mdb.Values {
+		for _, v := range monDBi.Values {
 			if pluggedSensors[v.Sensor] == nil {
 				return errors.New("no sensor '" + v.Sensor + "' connected")
 			}
@@ -1288,28 +1557,28 @@ func runStrobe(mdb *MonitorDBItem, check bool) error {
 	}
 
 	go func() {
-		readings := make([](chan float64), len(mdb.Values))
+		readings := make([](chan float64), len(monDBi.Values))
 		for i := range readings {
 			readings[i] = make(chan float64, 1)
 		}
-		vals := make([]interface{}, len(mdb.Values)+1)
-		for i, v := range mdb.Values {
+		vals := make([]interface{}, len(monDBi.Values)+1)
+		for i, v := range monDBi.Values {
 			go getSerData(v.Sensor, v.ValueIdx, readings[i])
 		}
 		vals[0] = time.Now()
 		for i, c := range readings {
 			vals[i+1] = <-c
 		}
-		updateStrob(mdb, vals...)
+		updateStrob(monDBi, vals...)
 	}()
 	return nil
 }
 
-func updateStrob(mdb *MonitorDBItem, vals ...interface{}) error {
+func updateStrob(monDBi *MonitorDBItem, vals ...interface{}) error {
 	var err,err2 error
 
 	if len(vals) < 2 {
-		//return fmt.Errorf("Update Strobe Error: no new detections for %s", mdb.UUID)
+		//return fmt.Errorf("Update Strobe Error: no new detections for %s", monDBi.UUID)
 		return nil
 	}
 
@@ -1321,8 +1590,8 @@ func updateStrob(mdb *MonitorDBItem, vals ...interface{}) error {
 
 	det := DetectionDBItem{
 		Id:             0,
-		Exp_id:         mdb.Exp_id,
-		Mon_id:         mdb.Id,
+		Exp_id:         monDBi.Exp_id,
+		Mon_id:         monDBi.Id,
 		Time:           tm.UTC().Format(time.RFC3339Nano),
 		Sensor_id:      "",
 		Sensor_val_id:  0,
@@ -1364,8 +1633,8 @@ func updateStrob(mdb *MonitorDBItem, vals ...interface{}) error {
 			det.Exp_id,
 			det.Mon_id,
 			det.Time,
-			mdb.Values[i-1].Sensor,
-			mdb.Values[i-1].ValueIdx,
+			monDBi.Values[i-1].Sensor,
+			monDBi.Values[i-1].ValueIdx,
 			det_value,
 			det_error,
 		)
@@ -1396,22 +1665,23 @@ func updateStrob(mdb *MonitorDBItem, vals ...interface{}) error {
 		return err
 	}
 
-	//logger.Printf("Update Strobe: Inserted for Monitor %s Count Detections %d", mdb.Id, res.RowsAffected())
+	//logger.Printf("Update Strobe: Inserted for Monitor %s Count Detections %d", monDBi.Id, res.RowsAffected())
 
 	err = tx.Commit()
 	if err != nil {
-		//fmt.Printf(LBLUE+"Update Strobe:"+RED+" Fatal Commit Update Detections for %s: %s\n"+NCO, mdb.UUID, err)
-		//logger.Printf("Update Strobe: Fatal Commit Update Detections for %s: %s", mdb.UUID, err.Error())
+		//fmt.Printf(LBLUE+"Update Strobe:"+RED+" Fatal Commit Update Detections for %s: %s\n"+NCO, monDBi.UUID, err)
+		//logger.Printf("Update Strobe: Fatal Commit Update Detections for %s: %s", monDBi.UUID, err.Error())
 		return err
 	}
 
 	//fmt.Printf(LBLUE+"Update Strobe %-23s:"+NCO+" insert detections\n", time.Now().Format("2006-01-02T15:04:05.999"))
-	//logger.Printf("Update Strobe %-23s: insert detections for %s", time.Now().Format("2006-01-02T15:04:05.999"), mdb.UUID)
+	//logger.Printf("Update Strobe %-23s: insert detections for %s", time.Now().Format("2006-01-02T15:04:05.999"), monDBi.UUID)
 
 	return nil
 }
 
 func newMonitor(opts *MonitorOpts) (*Monitor, error) {
+	// may be infinite monitoring
 	if (!opts.StopAt.IsZero()) && opts.StopAt.Before(time.Now()) {
 		err := errors.New("monitor stop time is in the past")
 		return nil, err
@@ -1451,11 +1721,13 @@ func newMonitor(opts *MonitorOpts) (*Monitor, error) {
 		opts.Setup_id,
 		opts.Step,
 		opts.Count,
+		opts.Duration,
 		time.Now(),
 		opts.StopAt,
 		true,
 		nil,
 		vals,
+		MonCounters{0,0},
 	}
 
 	return &mon, nil
@@ -1467,16 +1739,17 @@ func createRunMonitor(opts *MonitorOpts) (*Monitor, error) {
 		return mon, err
 	}
 	logger.Print("createRunMonitor: newMonitor: ok")
-	err = mon.Save()
+	err = mon.SaveNew()
 	if err != nil {
 		return mon, err
 	}
-	logger.Print("createRunMonitor: mon.Save: ok")
+	logger.Print("createRunMonitor: mon.SaveNew: ok")
 	err = mon.Run()
 	if err != nil {
 		return mon, err
 	}
 	logger.Print("createRunMonitor: mon.Run: ok")
+
 	monitors[mon.UUID.String()] = mon
 
 	return mon, nil

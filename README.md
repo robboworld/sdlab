@@ -195,15 +195,22 @@ where
 1. Lab.StartMonitor
    Start long monitoring with storing data to external storage as RRD, or SQL-liked database.
    Database type and parameters is specified in application config file.
+   Two stop conditions supported:
+       - stop by detections count, if set Count > 0,
+       - stop by time, if StopAt is not zero time (00001-01-01T00:00:00Z - January 1, year 1, 00:00:00.000000000 UTC),
+         if zero time - run infinite or until reached Count or until stop command sended.
+   Parameter Duration is not used as stop condition, just must set to cache in monitor info, 0 if not used.
+   Please calculate StopAt for stop by time condition.
 
    Returns:
        string  uuid on success, null on error (unknown sensor and etc.)
 
-   Example - monitor for experiment = 1, sensors setup = 1, detections count = 20, step = 5sec, stop at 2016-08-16T14:50:00Z, 1 sensor, 1 value.
+   Example - monitor for experiment = 1, sensors setup = 1, detections count = 0, step = 5sec, duration = 100sec, 
+             stop at 2016-08-16T14:50:00Z, 1 sensor, 1 value.
    Request:
 ``` json
     {"jsonrpc":"2.0","method":"Lab.StartMonitor","params":[
-        {"Exp_id":1,"Setup_id":1,"Step":5,"Count":20,"StopAt":"2016-08-16T14:50:00Z","Values":[
+        {"Exp_id":1,"Setup_id":1,"Step":5,"Count":0,"Duration":100,"StopAt":"2016-08-16T14:50:00Z","Values":[
             {"Sensor":"bmp085-1:77","ValueIdx":0}]
         }],"id":0}
 ```
@@ -212,11 +219,11 @@ where
     {"id":0,"result":"835047db-3d85-4a50-8d9e-4f9fc23dd2ac","error":null}
 ```
 
-   Example - monitor for experiment = 1, sensors setup = 1, detections count = 20, step = 1sec, stop at 2016-08-16T18:25:00Z, 1 sensor, 2 values.
+   Example - monitor for experiment = 1, sensors setup = 1, detections count = 20, step = 1sec, no stop at, 1 sensor, 2 values.
    Request:
 ``` json
     {"jsonrpc":"2.0","method":"Lab.StartMonitor","params":[
-        {"Exp_id":1,"Setup_id":1,"Step":1,"Count":20,"StopAt":"2016-08-16T18:25:00Z","Values":[
+        {"Exp_id":1,"Setup_id":1,"Step":1,"Count":20,"Duration":20,"StopAt":"00001-01-01T00:00:00Z","Values":[
             {"Sensor":"bmp085-1:77","ValueIdx":0},
             {"Sensor":"bmp085-1:77","ValueIdx":1}]
         }],"id":0}
@@ -282,8 +289,11 @@ where
        object with
                 Active - bool, true if monitoring is active, else false,
                 Created - string, creation time in RFC3339 format with TZ and nanoseconds,
-                StopAt - string, stop at restriction time in RFC3339 format with TZ and nanoseconds,
+                StopAt - string, "stop at" time restriction in RFC3339 format with TZ and nanoseconds,
                 Last - string, last detection time in RFC3339 format with TZ and nanoseconds,
+                Amount - uint, stop at count condition (0 if not used),
+                Duration - uint, monitoring duration cached in monitor (0 if not used),
+                Counters - object with currect counters (Done - all done detectios, Err - failed detections from all)
                 Archives - array of objects (Step, Len) with data storing steps info, 
                   if storage support returned multiple steps (as Step x 1, Step x 4, Step x 16, end etc., in seconds), 
                   default only one Step x 1, returned also Len of data strobes already saved by each Step,
@@ -304,6 +314,8 @@ where
 ``` json
     {"id":0,"result":
         {"Active":false,"Created":"2016-08-17T16:18:24.258780114+03:00","StopAt":"2016-08-17T13:25:00Z","Last":"2016-08-17T16:21:14.305Z",
+         "Amount":20,"Duration":444, 
+         "Counters":{"Done":170,"Err":4},
          "Archives":[{"Step":1,"Len":170}],
          "Values":[
              {"Name":"pressure0","Sensor":"bmp085-1:77","ValueIdx":0,"Len":170},
@@ -340,8 +352,9 @@ where
                 Exp_id int - experiment id,
                 Setup_id int - setup id (NOT USED),
                 Step int - (NOT USED),
-                Count int - numbr of detections, always 1 (NOT USED),
-                StopAt int - time (NOT USED, but MUST be not null),
+                Count int - number of detections, always 1 (NOT USED),
+                Duration int - duration, always 0 (NOT USED),
+                StopAt int - time (NOT USED, but MUST be not null, can be zero time = 0001-01-01T00:00:00Z),
                 Values - array of objects with sensor values info:
                          Sensor - sensor identifier,
                          ValueIdx - value index,
@@ -362,7 +375,7 @@ where
    Request:
 ``` json
     {"jsonrpc":"2.0","method":"Lab.StrobeMonitor","params":[
-        {"UUID":"","Opts":{"Exp_id":2,"Setup_id":2,"Step":1,"Count":1,"StopAt":"2016-08-16T14:50:00Z",
+        {"UUID":"","Opts":{"Exp_id":2,"Setup_id":2,"Step":1,"Count":1,"Duration":0,"StopAt":"0001-01-01T00:00:00Z",
          "Values":[{"Sensor":"bmp085-1:77","ValueIdx":0},{"Sensor":"bmp085-1:77","ValueIdx":1}]}
         }],"id":0}
 ```
@@ -374,7 +387,7 @@ where
    Request:
 ``` json
     {"jsonrpc":"2.0","method":"Lab.StrobeMonitor","params":[
-        {"UUID":"","Opts":{"Exp_id":2,"Setup_id":2,"Step":1,"Count":1,"StopAt":"2016-08-16T14:50:00Z",
+        {"UUID":"","Opts":{"Exp_id":2,"Setup_id":2,"Step":1,"Count":1,"Duration":0,"StopAt":"2016-08-16T14:50:00Z",
          "Values":[{"Sensor":"bmp085-1:77","ValueIdx":0},{"Sensor":"bmp085-1:77","ValueIdx":1}],
          "OptsStrict":true}
         }],"id":0}
