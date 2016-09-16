@@ -912,8 +912,8 @@ func (mon *Monitor) Update(vals ...interface{}) error {
 			)
 		}
 		sqlInsert = strings.TrimSuffix(sqlInsert, ",")
-		logger.Printf("Update: Debug sqlInsert: %s", sqlInsert)
-		logger.Printf("Update: Debug sqlInsert vals: %+v", values)
+		//logger.Printf("Update: Debug sqlInsert: %s", sqlInsert)
+		//logger.Printf("Update: Debug sqlInsert vals: %+v", values)
 		// Prepare the statement
 		stmt, err := tx.Prepare(sqlInsert)
 		if err != nil {
@@ -987,7 +987,7 @@ func (mon *Monitor) Stop() error {
 	}
 
 	mon.Active = false
-	logger.Print("Monitor.Stop: ok")
+	logger.Print("Monitor.Stop: ok (" + mon.UUID.String() + ")")
 
 	return mon.Save()
 }
@@ -1639,8 +1639,8 @@ func updateStrob(monDBi *MonitorDBItem, vals ...interface{}) error {
 		)
 	}
 	sqlInsert = strings.TrimSuffix(sqlInsert, ",")
-	logger.Printf("Update Strobe: Debug sqlInsert: %s", sqlInsert)
-	logger.Printf("Update Strobe: Debug sqlInsert vals: %+v", values)
+	//logger.Printf("Update Strobe: Debug sqlInsert: %s", sqlInsert)
+	//logger.Printf("Update Strobe: Debug sqlInsert vals: %+v", values)
 	// Prepare the statement
 	stmt, err := tx.Prepare(sqlInsert)
 	if err != nil {

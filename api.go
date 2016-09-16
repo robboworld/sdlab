@@ -582,7 +582,7 @@ func (lab *Lab) SetDatetime(opts *TimeSetOpts, ok *bool) error {
 		*ok = false
 		return errors.New("Set datetime failed: " + err.Error())
 	}
-	logger.Printf("The date is %s\n", out)
+	logger.Printf("Set datetime to %s\n", out)
 
 	/**
 	 *
@@ -608,7 +608,7 @@ func (lab *Lab) SetDatetime(opts *TimeSetOpts, ok *bool) error {
 			*ok = false
 			return errors.New("Set timezone failed: " + err.Error())
 		}
-		logger.Printf("The timezone is %s\n", opts.TZ)
+		logger.Printf("Set timezone to %s\n", opts.TZ)
 	}
 
 	// Reboot (need only if changed TZ)
