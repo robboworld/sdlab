@@ -651,7 +651,6 @@ func loadRunMonitors() error {
 			// no need Rollback
 			continue
 		}
-		logger.Printf("loadRunMonitors: monitors_select_all_id rows.Next: %d", monid)
 		if monid == 0 {
 			continue
 		}
