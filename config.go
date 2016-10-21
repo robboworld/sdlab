@@ -53,10 +53,16 @@ type I2CConf struct {
 
 type SeriesConf struct {
 	Buffer uint
+	Pool   uint
 }
 
 type MonitorConf struct {
 	Path string
+}
+
+type DatabaseConf struct {
+	Type string
+	Dsn  string
 }
 
 type Config struct {
@@ -66,6 +72,7 @@ type Config struct {
 	I2C         I2CConf
 	Series      SeriesConf
 	Monitor     MonitorConf
+	Database    DatabaseConf
 	Log         string
 }
 
@@ -79,11 +86,11 @@ type ValueYAML struct {
 	Name       string
 	Range      DataRange
 	Resolution int
-	File       string ",omitempty"
-	Command    string ",omitempty"
+	File       string `yaml:",omitempty"`
+	Command    string `yaml:",omitempty"`
 	Re         string
 	Multiplier float64
-	Addend     float64 ",omitempty"
+	Addend     float64 `yaml:",omitempty"`
 	Type       ValueType
 }
 
@@ -143,7 +150,7 @@ func valueFromYAML(valueYAML ValueYAML) (value *Value, err error) {
 	} else {
 		re, err = regexp.Compile(valueYAML.Re)
 		if err != nil {
-			logger.Printf("Error compiling regexp `%s': %s", valueYAML.Re, err)
+			logger.Printf("Error compiling regexp '%s': %s", valueYAML.Re, err)
 		}
 	}
 	if math.Abs(valueYAML.Multiplier) > math.SmallestNonzeroFloat64 {
@@ -201,18 +208,18 @@ func loadSensors(path string) (err error) {
 	for i := range files {
 		yml, err := ioutil.ReadFile(files[i])
 		if err != nil {
-			logger.Printf("Error reading file `%s': %s", files[i], err)
+			logger.Printf("Error reading file '%s': %s", files[i], err)
 			continue
 		}
 		var sensorYAML SensorYAML
 		err = yaml.Unmarshal(yml, &sensorYAML)
 		if err != nil {
-			logger.Printf("Error parsing file `%s': %s", files[i], err)
+			logger.Printf("Error parsing file '%s': %s", files[i], err)
 			continue
 		}
 		sensor, err := sensorFromYAML(sensorYAML)
 		if err != nil {
-			logger.Printf("Error reading configuration from file `%s': %s", files[i], err)
+			logger.Printf("Error reading configuration from file '%s': %s", files[i], err)
 			continue
 		}
 		sensors = append(sensors, *sensor)
@@ -223,7 +230,7 @@ func loadSensors(path string) (err error) {
 func loadConfig(path string) (err error) {
 	yml, err := ioutil.ReadFile(path)
 	if err != nil {
-		errf := fmt.Errorf("Error reading file `%s': %s", path, err)
+		errf := fmt.Errorf("Error reading file '%s': %s", path, err)
 		if errf != nil {
 			return errf
 		}
@@ -241,8 +248,41 @@ func loadConfig(path string) (err error) {
 	if config.Series.Buffer == 0 {
 		config.Series.Buffer = 100
 	}
+	if config.Series.Pool == 0 {
+		config.Series.Pool = 50
+	}
 	if config.Monitor.Path == "" {
 		config.Monitor.Path = "/var/lib/sdlab/monitor"
 	}
+	if config.Database.Type == "" {
+		config.Database.Type = "sqlite"
+	}
+	if config.Database.Dsn == "" {
+		switch config.Database.Type {
+		case "sqlite":
+			// Format: [file:]dbname[?param1=value1&...&paramN=valueN]
+			// @see https://www.sqlite.org/c3ref/open.html 
+			// Query parameters:
+			//   vfs:       Name of a VFS object.
+			//   mode:      The mode parameter may be set to either "ro", "rw", "rwc", or "memory".
+			//   cache:     The cache parameter may be set to either "shared" or "private".
+			//   psow:      The psow parameter indicates whether or not the powersafe overwrite property does or 
+			//              does not apply to the storage media on which the database file resides.
+			//   nolock:    The nolock parameter is a boolean query parameter which if set disables file locking in rollback journal modes.
+			//              This is useful for accessing a database on a filesystem that does not support locking.
+			//              Caution: Database corruption might result if two or more processes write to the same database and any one of those processes uses nolock=1.
+			//   immutable: The immutable parameter is a boolean query parameter that indicates that the database file is stored on read-only media.
+			//              When immutable is set, SQLite assumes that the database file cannot be changed, even by a process with higher privilege,
+			//              and so the database is opened read-only and all locking and change detection is disabled.
+			//              Caution: Setting the immutable property on a database file that does in fact change can result 
+			//              in incorrect query results and/or SQLITE_CORRUPT errors. See also: SQLITE_IOCAP_IMMUTABLE.
+			config.Database.Dsn = "/data/sdlab.db"
+
+		case "mysql":
+			// Format: [username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
+			config.Database.Dsn = "sdlab:sdlab@/sdlab"
+		}
+	}
+
 	return err
 }
