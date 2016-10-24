@@ -119,11 +119,11 @@ where:
     ``` json
     {"jsonrpc":"2.0","method":"Lab.StartSeries","params":[{"Values":[{"Sensor":"bmp085-1:77","ValueIdx":0},{"Sensor":"bmp085-1:77","ValueIdx":1}
         ],"Period":15000000000,"Count":10}],"id":0}
-   ```
+    ```
     Response:
-   ``` json
+    ``` json
     {"id":0,"result":"115047db-3d85-4a23-8d9e-4f9fcc3dd2ac","error":null}
-   ```
+    ```
 
 2.  Lab.StopSeries
     Stop series detection by uuid.
