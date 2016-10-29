@@ -1,5 +1,209 @@
 # sdlab
-SDLab backend service. Used for getting data from sensors and monitoring with saving detections to RRD database. Provide special API for frontend socket/tcp requests.
+
+SDLab backend service application. Used for getting data from sensors and monitoring with saving detections to database. Provide special API for frontend socket/tcp requests.
+
+SDLab application uses different types of databases:
+
+- RRD database (until v1.5)
+- SQLite database (v1.5+)
+
+Use sensors config files from **sdlab-sensors** project (https://github.com/robboworld/sdlab-sensors).
+
+
+## Table of Contents
+
+  * [Build](#build)
+  * [Config](#config)
+  * [Install](#install)
+  * [Run](#run)
+  * [JSON RPC SDLab backend API](#json-rpc-sdlab-backend-api)
+    * [Methods. Simple data API](#methods-simple-data-api)
+    * [Methods. Series API](#methods-series-api)
+    * [Methods. Monitoring API](#methods-monitoring-api)
+    * [Methods. Time API](#methods-time-api)
+    * [Methods. Video cameras API](#methods-video-cameras-api)
+    * [Errors examples](#errors-examples)
+
+
+## Build
+
+Use Go 1.4+.
+Tested on Debian 7 (wheezy), Debian 8 (jessie), Ubuntu/Linaro 14.04.
+
+Additional packages:
+
+- Golang: robboworld/i2c, pborman/uuid, gopkg.in/yaml.v1
+- Golang: mattn/go-sqlite3 (only for SQLite version)
+- Golang: ziutek/rrd (only for RRD version)
+- rrdtool, librrd-dev (only for RRD version)
+
+Steps:
+
+1.  Get sdlab sources.
+
+    ```
+    # mkdir -p ~/go/src
+    # cd ~/go/src
+    # git clone https://github.com/robboworld/sdlab.git
+    ```
+
+2.  Prepare environment.
+
+    ```
+    $ export GOPATH="/home/user/go"
+    $ export CGO_ENABLED=1
+    ```
+
+3.  Prepare sources and packages (sdlab/user, i2c, uuid, ( rrd | sqlite ), yaml.
+
+    ```
+    $ cd ~/go
+    $ mkdir -p src/github.com/robboworld/sdlab
+    $ cp -r src/sdlab/user src/github.com/robboworld/sdlab/
+    
+    $ go get github.com/robboworld/i2c
+
+    $#go get code.google.com/p/go-uuid   # old, this project has been moved:
+    $ go get github.com/pborman/uuid
+    
+    $ go get gopkg.in/yaml.v1
+    ```
+
+    Database related packages:
+
+    - (only for RRD version)
+
+        ```
+        # apt-get install rrdtool
+        # apt-get install librrd-dev
+        
+        $ go get github.com/ziutek/rrd
+        ```
+
+    - (only for SQLite version)
+
+        ```
+        $ go get github.com/mattn/go-sqlite3
+        ```
+
+4.  Build go application.
+
+    ```
+    $ cd ~/go/src/sdlab
+    $ go build -a -v
+    
+    #Check hidden warnings and possible errors
+    $ go tool vet ./
+    $ go tool vet -shadow ./
+    $ go tool vet -shadow -shadowstrict ./
+    ```
+
+
+## Config
+
+Application config: `sdlab.conf` (yaml file format).
+Config file location:
+
+- `/etc/sdlab/sdlab.conf` (**default**)
+
+OR
+
+- Use full path from first command line argument, example `sdlab /home/user/sdlab.conf`
+
+
+See config file example: `debian/sdlab.conf`
+
+
+## Install
+
+1.  Prepare application config:
+
+    ```
+    # mkdir /etc/sdlab/
+    # mkdir /etc/sdlab/sensors.d/
+    # cp debian/sdlab.conf /etc/sdlab/
+    # chmod 644 /etc/sdlab/sdlab.conf
+    # chown root:root /etc/sdlab/sdlab.conf
+    ```
+
+    Edit config (set i2c buses, buffers length, sensors configs path, database path and etc):
+
+    ```
+    # nano /etc/sdlab/sdlab.conf
+    ```
+
+2.  Prepare logs:
+
+    ```
+    # touch /var/log/sdlab.log
+    ```
+
+3.  Prepare databases.
+
+    - (only for RRD version) Prepare dirs for RRD monitoring:
+
+        ```
+        # mkdir -p /var/lib/sdlab/monitor/
+        ```
+
+    - (only for SQLite version):
+
+        ```
+        # mkdir -p /var/lib/sdlab/monitor/
+        ```
+
+4.  Install.
+
+    Install application:
+
+    ```
+    # cp ~/go/src/sdlab/sdlab /usr/sbin/sdlab
+    # chown root:root /usr/sbin/sdlab
+    # chmod 755 /usr/sbin/sdlab
+    ```
+
+    Install application as service and check pathes in init file:
+
+    ```
+    # cp ~/go/src/sdlab/debian/sdlab.init /etc/init.d/sdlab
+    # nano /etc/init.d/sdlab
+    # chown root:root /etc/init.d/sdlab
+    # chmod 755 /etc/init.d/sdlab
+    # update-rc.d sdlab defaults
+    ```
+
+5.  Install additional scripts.
+
+    Install timezone update scripts:
+
+    ```
+    # cp ~/go/src/sdlab/changetz.sh /usr/local/bin/changetz.sh
+    # cp ~/go/src/sdlab/sdlabreboot.sh /usr/local/bin/sdlabreboot.sh
+    # chown root:staff /usr/local/bin/changetz.sh
+    # chown root:root /usr/local/bin/changetz.sh /usr/local/bin/sdlabreboot.sh
+    # chmod 755 /usr/local/bin/changetz.sh /usr/local/bin/sdlabreboot.sh
+    ```
+
+    Install webcams maintenance scripts.
+    Prerequisites: **mjpg-streamer** (use https://github.com/alodos/mjpg-streamer.git fork of https://github.com/jacksonliam/mjpg-streamer.git )
+
+    ```
+    # cp ~/go/src/sdlab/mjpgcmdline.sh /usr/local/bin/mjpgcmdline.sh
+    # cp ~/go/src/sdlab/camlist.sh /usr/local/bin/camlist.sh
+    # chown root:root /usr/local/bin/mjpgcmdline.sh /usr/local/bin/camlist.sh
+    # chmod 755 /usr/local/bin/mjpgcmdline.sh /usr/local/bin/camlist.sh
+    ```
+
+
+## Run
+
+Run as service (start|stop|restart|status).
+
+```
+    # service sdlab stop
+    # service sdlab start
+```
+
 
 ## JSON RPC SDLab backend API
 
