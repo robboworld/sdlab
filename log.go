@@ -1,5 +1,5 @@
 /*
-    sdlab - ScratchDuino Laboratory core daemon
+    sdlab - STEM Lab core daemon
     Copyright (C) 2014  Dmitry Mikhirev <mikhirev@mezon.ru>
 
     This program is free software: you can redistribute it and/or modify
